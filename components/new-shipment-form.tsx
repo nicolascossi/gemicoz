@@ -193,7 +193,7 @@ export default function NewShipmentForm() {
                 <Button
                   type="button"
                   variant="outline"
-                  className="w-full"
+                  className="w-full bg-transparent"
                   onClick={() => document.getElementById("invoice")?.click()}
                 >
                   <Upload className="mr-2 h-4 w-4" />

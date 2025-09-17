@@ -1,46 +1,18 @@
-"use client"
-
-import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { cookies } from "next/headers"
+import { redirect } from "next/navigation"
 import LoginForm from "@/components/login-form"
-import { Loader2 } from "lucide-react"
 
 export default function Home() {
-  const router = useRouter()
-  const [isLoading, setIsLoading] = useState(true)
+  const cookieStore = cookies()
+  const isAuthenticated = cookieStore.get("authenticated")
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const isLoggedIn = localStorage.getItem("isLoggedIn")
-        if (isLoggedIn === "true") {
-          router.push("/dashboard")
-        } else {
-          setIsLoading(false)
-        }
-      } catch (error) {
-        console.error("Error checking authentication:", error)
-        setIsLoading(false)
-      }
-    }
-
-    checkAuth()
-  }, [router])
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    )
+  if (isAuthenticated?.value === "true") {
+    redirect("/dashboard")
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md">
-        <h1 className="mb-8 text-center text-3xl font-bold text-primary">Gemico Envíos</h1>
-        <LoginForm />
-      </div>
+    <main className="min-h-screen bg-background flex items-center justify-center p-4">
+      <LoginForm />
     </main>
   )
 }

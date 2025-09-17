@@ -6,64 +6,78 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Lock } from "lucide-react"
-import Image from "next/image"
-
-const CORRECT_PIN = "1147"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Loader2 } from "lucide-react"
 
 export default function LoginForm() {
-  const [pin, setPin] = useState("")
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const router = useRouter()
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setIsLoading(true)
+    setError("")
 
-    if (pin === CORRECT_PIN) {
+    // Simple authentication - in production, this should be more secure
+    if (username === "admin" && password === "gemico2024") {
+      // Set authentication cookie
+      document.cookie = "authenticated=true; path=/; max-age=86400" // 24 hours
+
+      // Store username in localStorage for display purposes
+      localStorage.setItem("userName", username)
       localStorage.setItem("isLoggedIn", "true")
+
       router.push("/dashboard")
     } else {
-      setError("PIN incorrecto. Intente nuevamente.")
+      setError("Credenciales incorrectas")
     }
+
+    setIsLoading(false)
   }
 
   return (
-    <Card className="border-border/40 bg-card shadow-lg">
-      <CardHeader className="space-y-1">
-        <div className="flex justify-center mb-4">
-          <Image
-            src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
-            alt="Gemico Logo"
-            width={150}
-            height={75}
-            className="object-contain"
-            priority
-          />
-        </div>
-        <CardTitle className="text-2xl text-center">Acceso al Sistema</CardTitle>
-        <CardDescription className="text-center">Ingrese el PIN para acceder a la aplicación</CardDescription>
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <CardTitle>Iniciar Sesión</CardTitle>
+        <CardDescription>Ingrese sus credenciales para acceder al sistema de gestión de envíos</CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-              <Lock className="h-5 w-5 text-muted-foreground" />
-            </div>
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="username">Usuario</Label>
+            <Input id="username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} required />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">Contraseña</Label>
             <Input
+              id="password"
               type="password"
-              placeholder="Ingrese el PIN"
-              className="pl-10"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              maxLength={4}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
             />
           </div>
-          {error && <p className="text-destructive text-sm">{error}</p>}
         </CardContent>
         <CardFooter>
-          <Button type="submit" className="w-full">
-            Ingresar
+          <Button type="submit" className="w-full" disabled={isLoading}>
+            {isLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Iniciando sesión...
+              </>
+            ) : (
+              "Iniciar Sesión"
+            )}
           </Button>
         </CardFooter>
       </form>
