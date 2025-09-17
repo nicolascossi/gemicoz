@@ -2,8 +2,8 @@ export interface Client {
   id: string
   businessName: string
   clientCode: string
-  email?: string
-  phone?: string
+  email: string
+  phone: string
   addresses: ClientAddress[]
 }
 
@@ -12,55 +12,45 @@ export interface ClientAddress {
   street: string
   city?: string
   title?: string
-  isDefault?: boolean
+  isDefault: boolean
 }
 
 export interface Transport {
   id: string
   name: string
-  email?: string
-  phone?: string
+  email: string
+  phone: string
+  transportCode: string
 }
 
 export interface Shipment {
   id: string
   shipmentNumber: string
   client: string
-  clientCode?: string
-  clientEmail?: string
-  clientPhone?: string
-  clientAddress?: string
+  clientEmail: string
+  clientPhone: string
+  clientAddress: string
   clientAddressId?: string
   clientAddressTitle?: string
+  clientCode?: string
   transport: string
-  transportEmail?: string
-  transportPhone?: string
+  transportEmail: string
+  transportPhone: string
   date: string
   packages: number
   pallets?: number
   weight?: number
   declaredValue?: number
-  shippingCost?: number
   status: "pending" | "sent"
-  invoiceNumber?: string
-  remitNumber?: string
-  deliveryNote?: string
-  orderNote?: string
-  notes?: string
-  hasColdChain?: boolean
-  isUrgent?: boolean
-  isFragile?: boolean
   attachments?: string[]
   createdAt?: string
+  invoiceNumber: string
+  remitNumber: string
+  deliveryNote: string // Campo para número de nota de entrega
+  notes: string
+  hasColdChain: boolean
+  isUrgent: boolean
+  isFragile?: boolean
   remitoTriplicado?: boolean
-}
-
-export interface EmailLog {
-  id: string
-  to: string
-  subject: string
-  sentAt: string
-  status: "sent" | "failed"
-  error?: string
-  shipmentId?: string
+  shippingCost?: number // Nueva propiedad para el costo del envío
 }

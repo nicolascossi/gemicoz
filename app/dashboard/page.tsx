@@ -1,14 +1,29 @@
-import { cookies } from "next/headers"
-import { redirect } from "next/navigation"
+"use client"
+
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import DashboardContent from "@/components/dashboard-content"
 
 export default function Dashboard() {
-  const cookieStore = cookies()
-  const isAuthenticated = cookieStore.get("authenticated")
+  const router = useRouter()
+  const [isLoading, setIsLoading] = useState(true)
 
-  if (isAuthenticated?.value !== "true") {
-    redirect("/")
+  useEffect(() => {
+    const isLoggedIn = localStorage.getItem("isLoggedIn")
+    if (isLoggedIn !== "true") {
+      router.push("/")
+    } else {
+      setIsLoading(false)
+    }
+  }, [router])
+
+  if (isLoading) {
+    return <div>Cargando...</div>
   }
 
-  return <DashboardContent />
+  return (
+    <main className="min-h-screen bg-background">
+      <DashboardContent />
+    </main>
+  )
 }
