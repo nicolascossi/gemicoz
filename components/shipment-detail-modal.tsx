@@ -1,941 +1,576 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useEffect, useCallback } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
-import { format } from "date-fns"
-import { Printer, Edit, Save, X } from "lucide-react"
-import type { Shipment, Client, ClientAddress } from "@/lib/types"
-import { getClients, getTransports } from "@/lib/data-utils"
-import { ref, update } from "firebase/database"
+import { Badge } from "@/components/ui/badge"
+import { Calendar, Package, Truck, MapPin, FileText, Printer, Edit, Save, X } from "lucide-react"
+import { ref, update, get } from "firebase/database"
 import { rtdb } from "@/lib/firebase"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import Image from "next/image"
+import { format } from "date-fns"
+import { es } from "date-fns/locale"
+import { useToast } from "@/components/ui/use-toast"
+import type { Shipment, Client, Transport } from "@/lib/types"
+import Link from "next/link"
 
 interface ShipmentDetailModalProps {
-  shipment: Shipment
+  shipment: Shipment | null
+  isOpen: boolean
   onClose: () => void
-  showPrintButton?: boolean
+  onShipmentUpdated: () => void
 }
 
-export default function ShipmentDetailModal({ shipment, onClose, showPrintButton = true }: ShipmentDetailModalProps) {
+export default function ShipmentDetailModal({
+  shipment,
+  isOpen,
+  onClose,
+  onShipmentUpdated,
+}: ShipmentDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [editedShipment, setEditedShipment] = useState<Shipment>({ ...shipment })
-  const [remitType, setRemitType] = useState<"R" | "X" | "RM">("R")
-  const [remitNumber, setRemitNumber] = useState("")
-  const [invoiceType, setInvoiceType] = useState<"A" | "B" | "E">("A")
-  const [invoiceNumber, setInvoiceNumber] = useState("")
-  const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
   const [clients, setClients] = useState<Client[]>([])
-  const [transports, setTransports] = useState<any[]>([])
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
-  const [selectedAddress, setSelectedAddress] = useState<ClientAddress | null>(null)
+  const [transports, setTransports] = useState<Transport[]>([])
+  const { toast } = useToast()
 
-  // Función mejorada para manejar navegación con teclado en selects
-  const handleSelectKeyDown = (
-    e: React.KeyboardEvent,
-    options: any[],
-    currentValue: any,
-    onChange: (value: any) => void,
-  ) => {
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      e.preventDefault()
-      e.stopPropagation()
-
-      const currentIndex = options.findIndex(
-        (option) =>
-          option.value === currentValue ||
-          option.id === currentValue ||
-          option.name === currentValue ||
-          option === currentValue,
-      )
-
-      let newIndex
-      if (e.key === "ArrowUp") {
-        newIndex = currentIndex > 0 ? currentIndex - 1 : options.length - 1
-      } else {
-        newIndex = currentIndex < options.length - 1 ? currentIndex + 1 : 0
-      }
-
-      const newValue = options[newIndex]
-      if (newValue) {
-        if (newValue.value) onChange(newValue.value)
-        else if (newValue.id) onChange(newValue.id)
-        else if (newValue.name) onChange(newValue.name)
-        else onChange(newValue)
-      }
-    }
-  }
+  const [editData, setEditData] = useState<Partial<Shipment>>({})
 
   useEffect(() => {
-    // Parse existing remitNumber if it exists
-    if (shipment.remitNumber) {
-      // Check for R format: "R - 00006 - NUMBER"
-      const rPattern = /^R - 00006 - (.+)$/
-      const rMatch = shipment.remitNumber.match(rPattern)
-
-      // Check for X format: "X - R00001 - NUMBER"
-      const xPattern = /^X - R00001 - (.+)$/
-      const xMatch = shipment.remitNumber.match(xPattern)
-
-      // Check for RM format: "RM - NUMBER"
-      const rmPattern = /^RM - (.+)$/
-      const rmMatch = shipment.remitNumber.match(rmPattern)
-
-      if (rMatch && rMatch[1]) {
-        setRemitType("R")
-        setRemitNumber(rMatch[1])
-      } else if (xMatch && xMatch[1]) {
-        setRemitType("X")
-        setRemitNumber(xMatch[1])
-      } else if (rmMatch && rmMatch[1]) {
-        setRemitType("RM")
-        setRemitNumber(rmMatch[1])
-      } else {
-        // If format doesn't match, just use the whole string as the number
-        setRemitType("R")
-        setRemitNumber(shipment.remitNumber)
-      }
-    } else {
-      setRemitType("R")
-      setRemitNumber("")
+    if (shipment && isOpen) {
+      setEditData({
+        client: shipment.client,
+        clientAddress: shipment.clientAddress,
+        transport: shipment.transport,
+        date: shipment.date,
+        packages: shipment.packages,
+        pallets: shipment.pallets,
+        weight: shipment.weight,
+        declaredValue: shipment.declaredValue,
+        invoiceNumber: shipment.invoiceNumber,
+        remitNumber: shipment.remitNumber,
+        notes: shipment.notes,
+        deliveryNote: shipment.deliveryNote,
+        hasColdChain: shipment.hasColdChain,
+        isUrgent: shipment.isUrgent,
+        isFragile: shipment.isFragile,
+        status: shipment.status,
+      })
     }
-
-    // Parse existing invoiceNumber if it exists
-    if (shipment.invoiceNumber) {
-      // Check for A format: "A 00001-NUMBER"
-      const aPattern = /^A 00001-(.+)$/
-      const aMatch = shipment.invoiceNumber.match(aPattern)
-
-      // Check for B format: "B 00001-(.+)$/
-      const bPattern = /^B 00001-(.+)$/
-      const bMatch = shipment.invoiceNumber.match(bPattern)
-
-      // Check for E format: "E 00004-NUMBER"
-      const ePattern = /^E 00004-(.+)$/
-      const eMatch = shipment.invoiceNumber.match(ePattern)
-
-      if (aMatch && aMatch[1]) {
-        setInvoiceType("A")
-        setInvoiceNumber(aMatch[1])
-      } else if (bMatch && bMatch[1]) {
-        setInvoiceType("B")
-        setInvoiceNumber(bMatch[1])
-      } else if (eMatch && eMatch[1]) {
-        setInvoiceType("E")
-        setInvoiceNumber(eMatch[1])
-      } else {
-        // If format doesn't match, just use the whole string as the number
-        setInvoiceType("A")
-        setInvoiceNumber(shipment.invoiceNumber)
-      }
-    } else {
-      setInvoiceType("A")
-      setInvoiceNumber("")
-    }
-  }, [shipment.remitNumber, shipment.invoiceNumber])
-
-  // Update editedShipment.remitNumber when remitType or remitNumber changes
-  useEffect(() => {
-    if (isEditing) {
-      if (remitNumber) {
-        if (remitType === "R") {
-          setEditedShipment((prev) => ({
-            ...prev,
-            remitNumber: `${remitType} - 00006 - ${remitNumber}`,
-          }))
-        } else if (remitType === "X") {
-          setEditedShipment((prev) => ({
-            ...prev,
-            remitNumber: `${remitType} - R00001 - ${remitNumber}`,
-          }))
-        } else if (remitType === "RM") {
-          setEditedShipment((prev) => ({
-            ...prev,
-            remitNumber: `${remitType} - ${remitNumber}`,
-          }))
-        }
-      } else {
-        setEditedShipment((prev) => ({
-          ...prev,
-          remitNumber: "",
-        }))
-      }
-    }
-  }, [remitType, remitNumber, isEditing])
-
-  // Update editedShipment.invoiceNumber when invoiceType or invoiceNumber changes
-  useEffect(() => {
-    if (isEditing) {
-      if (invoiceNumber) {
-        let prefix = ""
-        if (invoiceType === "A") {
-          prefix = "A 00001-"
-        } else if (invoiceType === "B") {
-          prefix = "B 00001-"
-        } else if (invoiceType === "E") {
-          prefix = "E 00004-"
-        }
-
-        setEditedShipment((prev) => ({
-          ...prev,
-          invoiceNumber: `${prefix}${invoiceNumber}`,
-        }))
-      } else {
-        setEditedShipment((prev) => ({
-          ...prev,
-          invoiceNumber: "",
-        }))
-      }
-    }
-  }, [invoiceType, invoiceNumber, isEditing])
+  }, [shipment, isOpen])
 
   useEffect(() => {
-    const loadData = async () => {
+    const fetchData = async () => {
+      if (!isOpen) return
+
       try {
-        const clientsData = await getClients()
-        const transportsData = await getTransports()
-        setClients(clientsData)
-        setTransports(transportsData)
+        // Fetch clients
+        const clientsRef = ref(rtdb, "clients")
+        const clientsSnapshot = await get(clientsRef)
+        if (clientsSnapshot.exists()) {
+          const clientsData = Object.entries(clientsSnapshot.val()).map(([id, data]: [string, any]) => ({
+            id,
+            ...data,
+          }))
+          setClients(clientsData)
+        }
 
-        // Find the client based on the shipment's client name
-        const client = clientsData.find((c) => c.businessName === shipment.client)
-        if (client) {
-          setSelectedClient(client)
-
-          // Try to find the selected address by ID or by matching street
-          let address = null
-          if (shipment.clientAddressId) {
-            address = client.addresses.find((a) => a.id === shipment.clientAddressId)
-          }
-
-          // If no address found by ID, try to match by street name
-          if (!address && shipment.clientAddress) {
-            const streetPart = shipment.clientAddress.split(",")[0].trim()
-            address = client.addresses.find((a) => a.street.includes(streetPart) || streetPart.includes(a.street))
-          }
-
-          // If still no match, use the default address
-          if (!address && client.addresses.length > 0) {
-            address = client.addresses.find((a) => a.isDefault) || client.addresses[0]
-          }
-
-          if (address) {
-            setSelectedAddress(address)
-          }
+        // Fetch transports
+        const transportsRef = ref(rtdb, "transports")
+        const transportsSnapshot = await get(transportsRef)
+        if (transportsSnapshot.exists()) {
+          const transportsData = Object.entries(transportsSnapshot.val()).map(([id, data]: [string, any]) => ({
+            id,
+            ...data,
+          }))
+          setTransports(transportsData)
         }
       } catch (error) {
-        console.error("Error loading clients and transports:", error)
-        setError("Error al cargar los datos de clientes y transportes")
+        console.error("Error fetching data:", error)
       }
     }
-    loadData()
-  }, [shipment])
 
-  const handleEdit = () => {
-    setIsEditing(true)
-  }
+    fetchData()
+  }, [isOpen])
 
-  const handleClientChange = (clientId: string) => {
-    const client = clients.find((c) => c.id === clientId)
-    if (client) {
-      setSelectedClient(client)
-      setSelectedAddress(null)
-
-      // If there's only one address, select it automatically
-      if (client.addresses.length === 1) {
-        setSelectedAddress(client.addresses[0])
-      }
-      // Otherwise, try to select the default address
-      else {
-        const defaultAddress = client.addresses.find((addr) => addr.isDefault)
-        if (defaultAddress) {
-          setSelectedAddress(defaultAddress)
-        }
-      }
-
-      // Also set the clientCode
-      setEditedShipment((prev) => ({
-        ...prev,
-        clientCode: client.clientCode,
-      }))
-    }
+  const handleClientChange = (clientName: string) => {
+    const selectedClient = clients.find((c) => c.name === clientName)
+    setEditData((prev) => ({
+      ...prev,
+      client: clientName,
+      clientAddress: selectedClient?.address || prev.clientAddress,
+    }))
   }
 
   const handleSave = async () => {
-    setIsSaving(true)
-    setError(null)
-    setSuccessMessage(null)
+    if (!shipment) return
+
+    setIsLoading(true)
     try {
-      // Update client info if selection has changed
-      // Modificar cómo se actualiza el envío para incluir correctamente el título
-      if (selectedClient && selectedAddress) {
-        setEditedShipment((prev) => ({
-          ...prev,
-          client: selectedClient.businessName,
-          clientEmail: selectedClient.email,
-          clientPhone: selectedClient.phone,
-          clientAddress: `${selectedAddress.street}${selectedAddress.city ? `, ${selectedAddress.city}` : ""}${
-            selectedAddress.title ? ` [${selectedAddress.title}]` : ""
-          }`,
-          clientAddressId: selectedAddress.id,
-          clientAddressTitle: selectedAddress.title || "", // Asegurar que el título se guarde explícitamente
-          clientCode: selectedClient.clientCode,
-        }))
-      }
-
-      // Update the state in the database
       const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
-      await update(shipmentRef, editedShipment)
-
-      console.log("Shipment updated successfully")
-      setSuccessMessage("Pedido actualizado correctamente.")
-
-      // If the state changed to "sent", try to send the email
-      if (editedShipment.status === "sent" && shipment.status !== "sent") {
-        // Check if client has an email
-        if (!editedShipment.clientEmail) {
-          console.log("Client has no email, skipping email notification")
-          setSuccessMessage(
-            "Pedido actualizado correctamente. No se envió notificación porque el cliente no tiene email registrado.",
-          )
-        } else {
-          try {
-            const response = await fetch("/api/send-email", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(editedShipment),
-            })
-
-            const data = await response.json()
-
-            if (!response.ok) {
-              throw new Error(data.error || "Failed to send email")
-            }
-
-            console.log("Email sent successfully:", data)
-            setSuccessMessage(
-              (prev) =>
-                `${prev} Correo de notificación enviado con ${editedShipment.attachments?.length || 0} archivo(s) adjunto(s).`,
-            )
-          } catch (emailError) {
-            console.error("Error sending email:", emailError)
-            setError(
-              `El pedido se actualizó, pero hubo un error al enviar el correo de notificación: ${emailError.message}`,
-            )
-          }
-        }
+      const updateData = {
+        ...editData,
+        packages: Number(editData.packages) || 0,
+        pallets: Number(editData.pallets) || 0,
+        weight: Number(editData.weight) || 0,
+        declaredValue: Number(editData.declaredValue) || 0,
+        updatedAt: new Date().toISOString(),
       }
+
+      await update(shipmentRef, updateData)
+
+      toast({
+        title: "Éxito",
+        description: "Envío actualizado correctamente",
+      })
 
       setIsEditing(false)
+      onShipmentUpdated()
     } catch (error) {
       console.error("Error updating shipment:", error)
-      setError(`Error al actualizar el envío: ${error instanceof Error ? error.message : String(error)}`)
+      toast({
+        title: "Error",
+        description: "Error al actualizar el envío",
+        variant: "destructive",
+      })
     } finally {
-      setIsSaving(false)
+      setIsLoading(false)
     }
   }
 
-  const handleCancel = () => {
-    setEditedShipment({ ...shipment })
-    // Reset remit fields to original values
-    if (shipment.remitNumber) {
-      const parts = shipment.remitNumber.split(" - ")
-      if (parts.length === 2) {
-        setRemitType(parts[0] as "R" | "X")
-        setRemitNumber(parts[1])
-      } else {
-        setRemitType("R")
-        setRemitNumber(shipment.remitNumber)
-      }
-    } else {
-      setRemitType("R")
-      setRemitNumber("")
-    }
-    setIsEditing(false)
-    setError(null)
-  }
+  const handleStatusChange = async (newStatus: "pending" | "sent" | "delivered") => {
+    if (!shipment) return
 
-  const handlePrintLabels = () => {
-    window.open(`/print-labels/${shipment.id}`, "_blank")
-  }
-
-  const adjustDate = useCallback((dateString) => {
+    setIsLoading(true)
     try {
-      // Handle empty or invalid dates
-      if (!dateString) return new Date().toISOString()
+      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
+      await update(shipmentRef, {
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+      })
 
-      // Parse the date string properly
-      const [year, month, day] = dateString.split("-").map(Number)
+      toast({
+        title: "Éxito",
+        description: "Estado actualizado correctamente",
+      })
 
-      // Validate date components
-      if (isNaN(year) || isNaN(month) || isNaN(day) || year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) {
-        console.error("Invalid date components:", { year, month, day })
-        return new Date().toISOString()
-      }
-
-      // Create the date at noon to avoid timezone issues
-      return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toISOString()
+      onShipmentUpdated()
     } catch (error) {
-      console.error("Error adjusting date:", error)
-      return new Date().toISOString()
-    }
-  }, [])
-
-  const handleChange = (field: keyof Shipment, value: any) => {
-    if (field === "date") {
-      try {
-        // Validate the date format before adjusting
-        if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-          setEditedShipment((prev) => ({ ...prev, [field]: adjustDate(value) }))
-        } else {
-          console.warn("Invalid date format:", value)
-          // Keep the previous valid date
-        }
-      } catch (error) {
-        console.error("Error handling date change:", error)
-      }
-    } else {
-      setEditedShipment((prev) => ({ ...prev, [field]: value }))
+      console.error("Error updating status:", error)
+      toast({
+        title: "Error",
+        description: "Error al actualizar el estado",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const handleAddressChange = (addressId: string) => {
-    if (!selectedClient) return
+  if (!shipment) return null
 
-    const address = selectedClient.addresses.find((a) => a.id === addressId)
-    if (address) {
-      setSelectedAddress(address)
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "pending":
+        return "bg-yellow-100 text-yellow-800"
+      case "sent":
+        return "bg-blue-100 text-blue-800"
+      case "delivered":
+        return "bg-green-100 text-green-800"
+      default:
+        return "bg-gray-100 text-gray-800"
     }
   }
 
-  const handleTransportChange = (transportName: string) => {
-    const transport = transports.find((t) => t.name === transportName)
-    if (transport) {
-      setEditedShipment((prev) => ({
-        ...prev,
-        transport: transportName,
-        transportEmail: transport.email,
-        transportPhone: transport.phone,
-      }))
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case "pending":
+        return "Pendiente"
+      case "sent":
+        return "Enviado"
+      case "delivered":
+        return "Entregado"
+      default:
+        return "Desconocido"
     }
-  }
-
-  if (!shipment) {
-    return null
   }
 
   return (
-    <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="flex flex-col items-center space-y-4">
-          <Image
-            src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
-            alt="Gemico Logo"
-            width={120}
-            height={60}
-            className="object-contain"
-            priority
-          />
-          <DialogTitle>Detalles del Envío {shipment.shipmentNumber}</DialogTitle>
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5" />
+              Envío {shipment.shipmentNumber}
+            </DialogTitle>
+            <div className="flex items-center gap-2">
+              <Badge className={getStatusColor(shipment.status)}>{getStatusText(shipment.status)}</Badge>
+              {!isEditing && (
+                <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+                  <Edit className="h-4 w-4 mr-1" />
+                  Editar
+                </Button>
+              )}
+            </div>
+          </div>
         </DialogHeader>
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+        <div className="space-y-6">
+          {/* Status Update */}
+          {!isEditing && (
+            <div className="flex items-center gap-2">
+              <Label>Cambiar Estado:</Label>
+              <Select value={shipment.status} onValueChange={handleStatusChange} disabled={isLoading}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pendiente</SelectItem>
+                  <SelectItem value="sent">Enviado</SelectItem>
+                  <SelectItem value="delivered">Entregado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-        {successMessage && (
-          <Alert>
-            <AlertDescription>{successMessage}</AlertDescription>
-          </Alert>
-        )}
+          {/* Basic Information */}
+          <div className="grid grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="client">Cliente</Label>
+                {isEditing ? (
+                  <Select value={editData.client} onValueChange={handleClientChange}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccionar cliente" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.name}>
+                          {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                    <MapPin className="h-4 w-4 text-gray-500" />
+                    <span>{shipment.client}</span>
+                  </div>
+                )}
+              </div>
 
-        <div className="grid gap-4 py-4">
+              <div>
+                <Label htmlFor="transport">Transporte</Label>
+                {isEditing ? (
+                  <Select
+                    value={editData.transport}
+                    onValueChange={(value) => setEditData((prev) => ({ ...prev, transport: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccionar transporte" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {transports.map((transport) => (
+                        <SelectItem key={transport.id} value={transport.name}>
+                          {transport.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                    <Truck className="h-4 w-4 text-gray-500" />
+                    <span>{shipment.transport}</span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="date">Fecha</Label>
+                {isEditing ? (
+                  <Input
+                    type="date"
+                    value={editData.date}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, date: e.target.value }))}
+                  />
+                ) : (
+                  <div className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                    <Calendar className="h-4 w-4 text-gray-500" />
+                    <span>{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="packages">Bultos</Label>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      min="0"
+                      value={editData.packages}
+                      onChange={(e) =>
+                        setEditData((prev) => ({ ...prev, packages: Number.parseInt(e.target.value) || 0 }))
+                      }
+                    />
+                  ) : (
+                    <div className="p-2 bg-gray-50 rounded text-center font-semibold">{shipment.packages || 0}</div>
+                  )}
+                </div>
+                <div>
+                  <Label htmlFor="pallets">Pallets</Label>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      min="0"
+                      value={editData.pallets}
+                      onChange={(e) =>
+                        setEditData((prev) => ({ ...prev, pallets: Number.parseInt(e.target.value) || 0 }))
+                      }
+                    />
+                  ) : (
+                    <div className="p-2 bg-gray-50 rounded text-center font-semibold">{shipment.pallets || 0}</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="weight">Peso (kg)</Label>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editData.weight}
+                      onChange={(e) =>
+                        setEditData((prev) => ({ ...prev, weight: Number.parseFloat(e.target.value) || 0 }))
+                      }
+                    />
+                  ) : (
+                    <div className="p-2 bg-gray-50 rounded text-center font-semibold">
+                      {shipment.weight ? `${shipment.weight.toFixed(2)} kg` : "0.00 kg"}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editData.declaredValue}
+                      onChange={(e) =>
+                        setEditData((prev) => ({ ...prev, declaredValue: Number.parseFloat(e.target.value) || 0 }))
+                      }
+                    />
+                  ) : (
+                    <div className="p-2 bg-gray-50 rounded text-center font-semibold">
+                      ${shipment.declaredValue ? shipment.declaredValue.toFixed(2) : "0.00"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Address */}
+          <div>
+            <Label htmlFor="clientAddress">Dirección del Cliente</Label>
+            {isEditing ? (
+              <Textarea
+                value={editData.clientAddress}
+                onChange={(e) => setEditData((prev) => ({ ...prev, clientAddress: e.target.value }))}
+                rows={2}
+              />
+            ) : (
+              <div className="p-3 bg-gray-50 rounded min-h-[60px]">{shipment.clientAddress || "No especificada"}</div>
+            )}
+          </div>
+
+          {/* Document Numbers */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="client">Cliente</Label>
-              {isEditing ? (
-                <Select value={selectedClient?.id} onValueChange={handleClientChange} disabled={true}>
-                  <SelectTrigger
-                    onKeyDown={(e) => handleSelectKeyDown(e, clients, selectedClient?.id, handleClientChange)}
-                  >
-                    <SelectValue placeholder="Seleccionar cliente" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {clients && clients.length > 0 ? (
-                      [...clients]
-                        .sort((a, b) => a.businessName.localeCompare(b.businessName))
-                        .map((client) => (
-                          <SelectItem key={client.id} value={client.id}>
-                            {client.businessName} ({client.clientCode})
-                          </SelectItem>
-                        ))
-                    ) : (
-                      <SelectItem value="no-clients" disabled>
-                        No hay clientes disponibles
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.client}</div>
-              )}
-            </div>
-
-            {isEditing && selectedClient && (
-              <div className="space-y-2">
-                <Label htmlFor="address">Dirección</Label>
-                <Select
-                  value={selectedAddress?.id}
-                  onValueChange={handleAddressChange}
-                  disabled={!selectedClient || selectedClient.addresses.length === 0}
-                >
-                  <SelectTrigger
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, selectedClient?.addresses || [], selectedAddress?.id, handleAddressChange)
-                    }
-                  >
-                    <SelectValue placeholder="Seleccionar dirección" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedClient && selectedClient.addresses.length > 0 ? (
-                      selectedClient.addresses.map((address) => (
-                        <SelectItem key={address.id} value={address.id}>
-                          {address.street}
-                          {address.city ? `, ${address.city}` : ""}
-                          {address.title ? ` [${address.title.toUpperCase()}]` : ""}
-                          {address.isDefault ? " [Predeterminada]" : ""}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="no-addresses" disabled>
-                        No hay direcciones registradas
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {!isEditing && (
-              <div className="space-y-2">
-                <Label htmlFor="clientAddress">Dirección</Label>
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.clientAddress}</div>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="transport">Transporte</Label>
-              {isEditing ? (
-                <Select value={editedShipment.transport} onValueChange={handleTransportChange}>
-                  <SelectTrigger
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, transports, editedShipment.transport, handleTransportChange)
-                    }
-                  >
-                    <SelectValue placeholder="Seleccionar transporte" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {transports && transports.length > 0 ? (
-                      transports.map((transport) => (
-                        <SelectItem key={transport.id} value={transport.name || `transport-${transport.id}`}>
-                          {transport.name || "Transporte sin nombre"}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="no-transports">No hay transportes disponibles</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.transport}</div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="shipmentNumber">Número de Envío</Label>
+            <div>
+              <Label htmlFor="invoiceNumber">Número de Factura</Label>
               {isEditing ? (
                 <Input
-                  id="shipmentNumber"
-                  value={editedShipment.shipmentNumber}
-                  onChange={(e) => handleChange("shipmentNumber", e.target.value)}
+                  value={editData.invoiceNumber}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                  placeholder="Ej: FC-001-00001234"
                 />
               ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.shipmentNumber}</div>
+                <div className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                  <FileText className="h-4 w-4 text-gray-500" />
+                  <span>{shipment.invoiceNumber || "No especificado"}</span>
+                </div>
               )}
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="date">Fecha de Despacho</Label>
+            <div>
+              <Label htmlFor="remitNumber">Número de Remito</Label>
               {isEditing ? (
                 <Input
-                  id="date"
-                  type="date"
-                  value={editedShipment.date ? format(new Date(editedShipment.date), "yyyy-MM-dd") : ""}
-                  onChange={(e) => handleChange("date", e.target.value)}
-                  onInvalid={(e) => e.preventDefault()}
-                  min="2000-01-01"
-                  max="2100-12-31"
+                  value={editData.remitNumber}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, remitNumber: e.target.value }))}
+                  placeholder="R - 0006-YYMM-XXX"
                 />
               ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{format(new Date(shipment.date), "dd/MM/yyyy")}</div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="packages">Cantidad de Bultos</Label>
-              {isEditing ? (
-                <Input
-                  id="packages"
-                  type="number"
-                  min="0"
-                  value={editedShipment.packages}
-                  onChange={(e) => handleChange("packages", Number.parseInt(e.target.value))}
-                />
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.packages}</div>
-              )}
-            </div>
-
-            {/* Nuevo campo para Pallets */}
-            <div className="space-y-2">
-              <Label htmlFor="pallets">Cantidad de Pallets</Label>
-              {isEditing ? (
-                <Input
-                  id="pallets"
-                  type="number"
-                  min="0"
-                  value={editedShipment.pallets || 0}
-                  onChange={(e) => handleChange("pallets", Number.parseInt(e.target.value))}
-                />
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.pallets || 0}</div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="weight">Peso (kg)</Label>
-              {isEditing ? (
-                <Input
-                  id="weight"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={editedShipment.weight || 0}
-                  onChange={(e) => handleChange("weight", Number.parseFloat(e.target.value))}
-                />
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">{shipment.weight || 0} kg</div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
-              {isEditing ? (
-                <Input
-                  id="declaredValue"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={editedShipment.declaredValue || 0}
-                  onChange={(e) => handleChange("declaredValue", Number.parseFloat(e.target.value))}
-                />
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">$ {shipment.declaredValue || 0}</div>
-              )}
-            </div>
-
-            {/* Nuevo campo para Costo de Envío */}
-            <div className="space-y-2">
-              <Label htmlFor="shippingCost">Costo de Envío ($)</Label>
-              {isEditing ? (
-                <Input
-                  id="shippingCost"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={editedShipment.shippingCost || 0}
-                  onChange={(e) => handleChange("shippingCost", Number.parseFloat(e.target.value))}
-                />
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">$ {shipment.shippingCost || 0}</div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="status">Estado</Label>
-              {isEditing ? (
-                <Select value={editedShipment.status} onValueChange={(value) => handleChange("status", value)}>
-                  <SelectTrigger
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(
-                        e,
-                        [
-                          { value: "pending", label: "Pendiente" },
-                          { value: "sent", label: "Enviado" },
-                        ],
-                        editedShipment.status,
-                        (value) => handleChange("status", value),
-                      )
-                    }
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pending">Pendiente</SelectItem>
-                    <SelectItem value="sent">Enviado</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="p-2 border rounded-md bg-muted/30">
-                  {shipment.status === "sent" ? "Enviado" : "Pendiente"}
+                <div className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+                  <FileText className="h-4 w-4 text-gray-500" />
+                  <span>{shipment.remitNumber || "No especificado"}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="invoiceNumber">Número de Factura</Label>
-            {isEditing ? (
-              <div className="flex gap-2">
-                <Select value={invoiceType} onValueChange={(value) => setInvoiceType(value as "A" | "B" | "E")}>
-                  <SelectTrigger
-                    className="w-20"
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, [{ value: "A" }, { value: "B" }, { value: "E" }], invoiceType, (value) =>
-                        setInvoiceType(value as "A" | "B" | "E"),
-                      )
-                    }
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="A">A</SelectItem>
-                    <SelectItem value="B">B</SelectItem>
-                    <SelectItem value="E">E</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  id="invoiceNumber"
-                  placeholder="Número"
-                  value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
-                  className="flex-1"
+          {/* Notes */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="notes">Observaciones</Label>
+              {isEditing ? (
+                <Textarea
+                  value={editData.notes}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, notes: e.target.value }))}
+                  rows={3}
                 />
-              </div>
-            ) : (
-              <div className="p-2 border rounded-md bg-muted/30">{shipment.invoiceNumber}</div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="remitNumber">Número de Remito</Label>
-            {isEditing ? (
-              <div className="flex gap-2">
-                <Select value={remitType} onValueChange={(value) => setRemitType(value as "R" | "X" | "RM")}>
-                  <SelectTrigger
-                    className="w-20"
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, [{ value: "R" }, { value: "X" }, { value: "RM" }], remitType, (value) =>
-                        setRemitType(value as "R" | "X" | "RM"),
-                      )
-                    }
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="R">R</SelectItem>
-                    <SelectItem value="X">X</SelectItem>
-                    <SelectItem value="RM">RM</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  id="remitNumber"
-                  placeholder="Número"
-                  value={remitNumber}
-                  onChange={(e) => setRemitNumber(e.target.value)}
-                  className="flex-1"
+              ) : (
+                <div className="p-3 bg-gray-50 rounded min-h-[80px]">{shipment.notes || "Sin observaciones"}</div>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="deliveryNote">Nota de Entrega</Label>
+              {isEditing ? (
+                <Textarea
+                  value={editData.deliveryNote}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, deliveryNote: e.target.value }))}
+                  rows={3}
                 />
-              </div>
-            ) : (
-              <div className="p-2 border rounded-md bg-muted/30">{shipment.remitNumber}</div>
-            )}
-          </div>
-
-          {/* Campo de Nota de Entrega como input de texto */}
-          <div className="space-y-2">
-            <Label htmlFor="deliveryNote">Nota de Entrega</Label>
-            {isEditing ? (
-              <Input
-                id="deliveryNote"
-                placeholder="Ingrese el número de nota de entrega"
-                value={editedShipment.deliveryNote || ""}
-                onChange={(e) => handleChange("deliveryNote", e.target.value)}
-              />
-            ) : (
-              <div className="p-2 border rounded-md bg-muted/30">{shipment.deliveryNote || "Sin nota"}</div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="notes">Aclaraciones</Label>
-            {isEditing ? (
-              <Textarea
-                id="notes"
-                value={editedShipment.notes}
-                onChange={(e) => handleChange("notes", e.target.value)}
-              />
-            ) : (
-              <div className="p-2 border rounded-md bg-muted/30">{shipment.notes}</div>
-            )}
-          </div>
-
-          <div className="flex space-x-4">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="hasColdChain"
-                checked={isEditing ? editedShipment.hasColdChain : shipment.hasColdChain}
-                onCheckedChange={(checked) => handleChange("hasColdChain", checked as boolean)}
-                disabled={!isEditing}
-              />
-              <Label htmlFor="hasColdChain">Cadena de Frío</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="isUrgent"
-                checked={isEditing ? editedShipment.isUrgent : shipment.isUrgent}
-                onCheckedChange={(checked) => handleChange("isUrgent", checked as boolean)}
-                disabled={!isEditing}
-              />
-              <Label htmlFor="isUrgent">Urgente</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="isFragile"
-                checked={isEditing ? editedShipment.isFragile : shipment.isFragile}
-                onCheckedChange={(checked) => handleChange("isFragile", checked as boolean)}
-                disabled={!isEditing}
-              />
-              <Label htmlFor="isFragile">Muy Frágil</Label>
+              ) : (
+                <div className="p-3 bg-gray-50 rounded min-h-[80px]">
+                  {shipment.deliveryNote || "Sin nota de entrega"}
+                </div>
+              )}
             </div>
           </div>
 
-          {shipment.attachments && shipment.attachments.length > 0 && (
-            <div className="space-y-2">
-              <Label>Documentos adjuntos</Label>
-              <div className="space-y-2">
-                {shipment.attachments.map((url, index) => (
-                  <div key={index} className="p-2 border rounded-md bg-muted/30 flex justify-between items-center">
-                    <span>Documento {index + 1}</span>
-                    <Button variant="ghost" size="sm" asChild>
-                      <a href={url} target="_blank" rel="noopener noreferrer">
-                        Ver
-                      </a>
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {!isEditing && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <h3 className="text-sm font-medium">Cliente</h3>
-              <p>{shipment.client}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Transporte</h3>
-              <p>{shipment.transport}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Pallets</h3>
-              <p>{shipment.pallets || "0"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Bultos</h3>
-              <p>{shipment.packages}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Peso</h3>
-              <p>{shipment.weight ? `${shipment.weight.toFixed(2)} kg` : "No especificado"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Valor Declarado</h3>
-              <p>{shipment.declaredValue ? `$${shipment.declaredValue.toFixed(2)}` : "No especificado"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Costo de Envío</h3>
-              <p>{shipment.shippingCost ? `$${shipment.shippingCost.toFixed(2)}` : "No especificado"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Factura</h3>
-              <p>{shipment.invoiceNumber || "No especificado"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Remito</h3>
-              <p>{shipment.remitNumber || "No especificado"}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium">Nota de Entrega</h3>
-              <p>{shipment.deliveryNote || "Sin nota"}</p>
-            </div>
-          </div>
-        )}
-
-        <DialogFooter className="flex justify-between sm:justify-between">
-          {isEditing ? (
-            <>
-              <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
-                <X className="mr-2 h-4 w-4" /> Cancelar
-              </Button>
-              <Button onClick={handleSave} disabled={isSaving || !selectedClient || !selectedAddress}>
-                {isSaving ? (
-                  <>
-                    <span className="spinner mr-2"></span> Guardando...
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-2 h-4 w-4" /> Guardar
-                  </>
-                )}
-              </Button>
-            </>
-          ) : (
-            <>
-              {showPrintButton ? (
+          {/* Special Characteristics */}
+          <div>
+            <Label>Características Especiales</Label>
+            <div className="flex flex-wrap gap-4 mt-2">
+              {isEditing ? (
                 <>
-                  <Button variant="outline" onClick={handleEdit}>
-                    <Edit className="mr-2 h-4 w-4" /> Editar
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="hasColdChain"
+                      checked={editData.hasColdChain}
+                      onCheckedChange={(checked) =>
+                        setEditData((prev) => ({ ...prev, hasColdChain: checked as boolean }))
+                      }
+                    />
+                    <Label htmlFor="hasColdChain" className="text-sm font-normal">
+                      Cadena de frío
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="isUrgent"
+                      checked={editData.isUrgent}
+                      onCheckedChange={(checked) => setEditData((prev) => ({ ...prev, isUrgent: checked as boolean }))}
+                    />
+                    <Label htmlFor="isUrgent" className="text-sm font-normal">
+                      Urgente
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="isFragile"
+                      checked={editData.isFragile}
+                      onCheckedChange={(checked) => setEditData((prev) => ({ ...prev, isFragile: checked as boolean }))}
+                    />
+                    <Label htmlFor="isFragile" className="text-sm font-normal">
+                      Frágil
+                    </Label>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {shipment.hasColdChain && (
+                    <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                      ❄️ Cadena de frío
+                    </Badge>
+                  )}
+                  {shipment.isUrgent && (
+                    <Badge variant="secondary" className="bg-red-100 text-red-800">
+                      ⚡ Urgente
+                    </Badge>
+                  )}
+                  {shipment.isFragile && (
+                    <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                      ⚠️ Frágil
+                    </Badge>
+                  )}
+                  {!shipment.hasColdChain && !shipment.isUrgent && !shipment.isFragile && (
+                    <span className="text-gray-500 text-sm">Sin características especiales</span>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Timestamps */}
+          <div className="grid grid-cols-2 gap-4 text-sm text-gray-600">
+            <div>
+              <Label>Creado</Label>
+              <div className="p-2 bg-gray-50 rounded">
+                {format(new Date(shipment.createdAt), "dd/MM/yyyy HH:mm", { locale: es })}
+              </div>
+            </div>
+            {shipment.updatedAt && (
+              <div>
+                <Label>Última actualización</Label>
+                <div className="p-2 bg-gray-50 rounded">
+                  {format(new Date(shipment.updatedAt), "dd/MM/yyyy HH:mm", { locale: es })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex justify-between pt-4 border-t">
+            <div className="flex gap-2">
+              <Link href={`/print-labels/${shipment.id}`} target="_blank">
+                <Button variant="outline">
+                  <Printer className="h-4 w-4 mr-2" />
+                  Imprimir Etiquetas
+                </Button>
+              </Link>
+            </div>
+            <div className="flex gap-2">
+              {isEditing ? (
+                <>
+                  <Button variant="outline" onClick={() => setIsEditing(false)} disabled={isLoading}>
+                    <X className="h-4 w-4 mr-1" />
+                    Cancelar
                   </Button>
-                  <Button onClick={handlePrintLabels}>
-                    <Printer className="mr-2 h-4 w-4" /> Imprimir Etiquetas
+                  <Button onClick={handleSave} disabled={isLoading}>
+                    <Save className="h-4 w-4 mr-1" />
+                    {isLoading ? "Guardando..." : "Guardar"}
                   </Button>
                 </>
               ) : (
-                <div className="w-full flex justify-center">
-                  <Button onClick={handleEdit}>
-                    <Edit className="mr-2 h-4 w-4" /> Editar
-                  </Button>
-                </div>
+                <Button variant="outline" onClick={onClose}>
+                  Cerrar
+                </Button>
               )}
-            </>
-          )}
-        </DialogFooter>
+            </div>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )

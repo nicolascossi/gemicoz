@@ -67,7 +67,7 @@
     "nodemailer": "latest",
     "papaparse": "latest",
     "qrcode": "^1.5.3",
-    "qrcode.react": "latest",
+    "qrcode.react": "4.2.0",
     "react": "^18",
     "react-day-picker": "8.10.1",
     "react-dom": "^18",
