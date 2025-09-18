@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, FileDown, Search, Mail, Loader2, CalendarIcon, CheckCircle2, X, Download, FileText, Filter } from 'lucide-react'
+import { ArrowLeft, FileDown, Search, Mail, Loader2, Calendar, CheckCircle2, X } from "lucide-react"
 import { format, isWithinInterval, parseISO, isValid } from "date-fns"
 import { es } from "date-fns/locale"
 import { ref, get, update, onValue, off } from "firebase/database"
@@ -21,14 +21,9 @@ import { toast, useToast } from "@/components/ui/use-toast"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { debounce } from "lodash"
-import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { cn } from "@/lib/utils"
-import { DateRange } from "react-day-picker"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import jsPDF from "jspdf"
-import "jspdf-autotable"
-import * as XLSX from "xlsx"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
+import XLSX from "xlsx"
 
 // Extended shipment type with client code
 interface ExtendedShipment extends Shipment {
@@ -93,7 +88,7 @@ const formatPalletsAndPackages = (pallets?: number, packages?: number): string =
     return `${packages || 0} Bultos`
   }
 
-  // Si hay pallets, mostrar "X Pallets and X/X Bultos"
+  // Si hay pallets, mostrar "X Pallets y X/X Bultos"
   return `${pallets} Pallets y ${packages || 0} Bultos`
 }
 
@@ -210,19 +205,20 @@ function ShipmentList({
             <TableHeader>
               <TableRow>
                 {/* Eliminamos la columna de número de envío */}
-                <TableHead className="w-[6%] text-xs">Fecha</TableHead>
-                <TableHead className="w-[5%] text-xs">Código</TableHead>
-                <TableHead className="w-[11%] text-xs">Cliente</TableHead>
-                <TableHead className="w-[9%] text-xs">Transporte</TableHead>
-                <TableHead className="w-[6%] text-xs">Pallets/Bultos</TableHead>
+                <TableHead className="w-[5%] text-xs">Fecha</TableHead>
+                <TableHead className="w-[4%] text-xs">Código</TableHead>
+                <TableHead className="w-[9%] text-xs">Cliente</TableHead>
+                <TableHead className="w-[8%] text-xs">Transporte</TableHead>
+                <TableHead className="w-[5%] text-xs">Pallets/Bultos</TableHead>
                 <TableHead className="w-[4%] text-xs">Peso</TableHead>
-                <TableHead className="w-[5%] text-xs">$ Valor</TableHead>
-                <TableHead className="w-[5%] text-xs">$ Envío</TableHead>
-                <TableHead className="w-[9%] text-xs">Factura</TableHead>
-                <TableHead className="w-[9%] text-xs">Remito</TableHead>
-                <TableHead className="w-[10%] text-xs">Nota Entrega</TableHead>
+                <TableHead className="w-[4%] text-xs">$ Valor</TableHead>
+                <TableHead className="w-[4%] text-xs">$ Envío</TableHead>
+                <TableHead className="w-[8%] text-xs">Factura</TableHead>
+                <TableHead className="w-[8%] text-xs">Remito</TableHead>
+                <TableHead className="w-[8%] text-xs">Nota Entrega</TableHead>
+                <TableHead className="w-[8%] text-xs">Nota Pedido</TableHead>
                 <TableHead className="w-[4%] text-xs">Estado</TableHead>
-                {showRemitoTriplicado && <TableHead className="w-[8%] text-xs">Remito Trip.</TableHead>}
+                {showRemitoTriplicado && <TableHead className="w-[7%] text-xs">Remito Trip.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -258,6 +254,9 @@ function ShipmentList({
                     </TableCell>
                     <TableCell className="text-xs truncate" title={shipment.deliveryNote || "Sin nota"}>
                       {highlightText(shipment.deliveryNote || "Sin nota", searchTerm)}
+                    </TableCell>
+                    <TableCell className="text-xs truncate" title={shipment.orderNote || "Sin nota"}>
+                      {highlightText(shipment.orderNote || "Sin nota", searchTerm)}
                     </TableCell>
                     <TableCell>
                       <Badge variant={shipment.status === "sent" ? "default" : "secondary"} className="text-xs">
@@ -308,419 +307,1000 @@ function ShipmentList({
 }
 
 export default function EnviosPorFechaPage() {
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: new Date(),
-    to: new Date(),
-  })
-  const [shipments, setShipments] = useState<Shipment[]>([])
-  const [filteredShipments, setFilteredShipments] = useState<Shipment[]>([])
-  const [loading, setLoading] = useState(false)
+  const router = useRouter()
+  const [startDate, setStartDate] = useState<string>(format(new Date(), "yyyy-MM-dd"))
+  const [endDate, setEndDate] = useState<string>(format(new Date(), "yyyy-MM-dd"))
+  const [shipments, setShipments] = useState<ExtendedShipment[]>([])
+  const [clients, setClients] = useState<Record<string, Client>>({})
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSending, setIsSending] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [transportFilter, setTransportFilter] = useState<string>("all")
-  const [clientFilter, setClientFilter] = useState<string>("all")
+  const [dateError, setDateError] = useState<string | null>(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const { toast } = useToast()
 
-  // Get unique values for filters
-  const uniqueTransports = [...new Set(shipments.map((s) => s.transport).filter(Boolean))]
-  const uniqueClients = [...new Set(shipments.map((s) => s.client).filter(Boolean))]
+  // Use a ref to store the Firebase listener reference for cleanup
+  const shipmentsListenerRef = useRef<any>(null)
 
-  const loadShipments = async () => {
-    if (!dateRange?.from || !dateRange?.to) return
+  useEffect(() => {
+    // Fetch clients first
+    fetchClients()
 
-    setLoading(true)
+    // Cleanup function to remove the listener when component unmounts
+    return () => {
+      console.log("Cleaning up shipments listener...")
+      if (shipmentsListenerRef.current) {
+        off(shipmentsListenerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (startDate && endDate && Object.keys(clients).length > 0) {
+      // Validar fechas antes de hacer la búsqueda
+      if (!isValidDate(startDate) || !isValidDate(endDate)) {
+        setDateError("Una o ambas fechas seleccionadas no son válidas. Por favor, seleccione fechas correctas.")
+        return
+      }
+
+      // Si las fechas son válidas, limpiar el error y buscar envíos
+      setDateError(null)
+      setupShipmentsListener(startDate, endDate)
+    }
+  }, [startDate, endDate, clients])
+
+  const fetchClients = async () => {
     try {
-      const shipmentsRef = ref(rtdb, "shipments")
-      const snapshot = await get(shipmentsRef)
+      const clientsRef = ref(db, "clients")
+      const snapshot = await get(clientsRef)
 
       if (snapshot.exists()) {
-        const data = snapshot.val()
-        const shipmentsArray: Shipment[] = Object.keys(data).map((key) => ({
-          id: key,
-          ...data[key],
-        }))
+        const clientsData = snapshot.val()
+        const clientsMap: Record<string, Client> = {}
 
-        // Filter by date range
-        const filtered = shipmentsArray.filter((shipment) => {
-          const shipmentDate = new Date(shipment.date)
-          const fromDate = new Date(dateRange.from!)
-          const toDate = new Date(dateRange.to!)
-
-          // Set time to start/end of day for proper comparison
-          fromDate.setHours(0, 0, 0, 0)
-          toDate.setHours(23, 59, 59, 999)
-          shipmentDate.setHours(12, 0, 0, 0) // Set to noon to avoid timezone issues
-
-          return shipmentDate >= fromDate && shipmentDate <= toDate
+        // Create a map of client name to client data for quick lookup
+        Object.entries(clientsData).forEach(([id, data]) => {
+          const client = data as Client
+          if (client.businessName) {
+            clientsMap[client.businessName] = { id, ...client }
+          }
         })
 
-        // Sort by date (newest first)
-        filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-        setShipments(filtered)
-      } else {
-        setShipments([])
+        setClients(clientsMap)
       }
     } catch (error) {
-      console.error("Error loading shipments:", error)
-      setShipments([])
-    } finally {
-      setLoading(false)
+      console.error("Error fetching clients:", error)
+      toast({
+        title: "Error",
+        description: "No se pudieron cargar los clientes. Por favor, intente de nuevo.",
+        variant: "destructive",
+      })
     }
   }
 
-  // Apply filters and search
-  useEffect(() => {
-    let filtered = [...shipments]
+  // Set up real-time listener for shipments within date range
+  const setupShipmentsListener = (start: string, end: string) => {
+    setIsLoading(true)
 
-    // Apply search filter
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase()
-      filtered = filtered.filter(
-        (shipment) =>
-          shipment.shipmentNumber?.toLowerCase().includes(searchLower) ||
-          shipment.client?.toLowerCase().includes(searchLower) ||
-          shipment.transport?.toLowerCase().includes(searchLower) ||
-          shipment.clientAddress?.toLowerCase().includes(searchLower) ||
-          shipment.invoiceNumber?.toLowerCase().includes(searchLower) ||
-          shipment.remitNumber?.toLowerCase().includes(searchLower) ||
-          shipment.deliveryNote?.toLowerCase().includes(searchLower) ||
-          shipment.notes?.toLowerCase().includes(searchLower),
+    // Clean up any existing listener
+    if (shipmentsListenerRef.current) {
+      off(shipmentsListenerRef.current)
+    }
+
+    try {
+      // Validar fechas antes de proceder
+      if (!isValidDate(start) || !isValidDate(end)) {
+        throw new Error("Fechas inválidas")
+      }
+
+      // Convertir fechas de string a objetos Date para comparación
+      const startDateObj = parseISO(`${start}T00:00:00`)
+      const endDateObj = parseISO(`${end}T23:59:59`)
+
+      if (!isValid(startDateObj) || !isValid(endDateObj)) {
+        throw new Error("Fechas de rango inválidas")
+      }
+
+      // Set up real-time listener for all shipments
+      const shipmentsRef = ref(rtdb, "shipments")
+      shipmentsListenerRef.current = shipmentsRef
+
+      onValue(
+        shipmentsRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const shipmentsData = snapshot.val()
+            const shipmentsArray: ExtendedShipment[] = []
+
+            Object.entries(shipmentsData).forEach(([id, data]) => {
+              const shipment = data as Omit<Shipment, "id">
+
+              try {
+                // Convertir la fecha del envío a objeto Date
+                const shipmentDate = new Date(shipment.date)
+
+                // Verificar que la fecha sea válida
+                if (isNaN(shipmentDate.getTime())) {
+                  console.warn("Invalid date for shipment:", shipment.shipmentNumber)
+                  return // Skip this shipment
+                }
+
+                // Comprobar si la fecha del envío está dentro del rango seleccionado
+                if (isWithinInterval(shipmentDate, { start: startDateObj, end: endDateObj })) {
+                  // Add client code if available
+                  const clientData = clients[shipment.client]
+                  const extendedShipment: ExtendedShipment = {
+                    id,
+                    ...shipment,
+                    clientCode: clientData?.clientCode || "-",
+                    remitoTriplicado: (data as any).remitoTriplicado || false,
+                    pallets: (data as any).pallets || 0,
+                  }
+                  shipmentsArray.push(extendedShipment)
+                }
+              } catch (error) {
+                console.error("Error processing shipment date:", error, shipment)
+              }
+            })
+
+            // Ordenar por número de envío (más reciente primero)
+            shipmentsArray.sort((a, b) => {
+              const numA = Number.parseInt(a.shipmentNumber.replace("ENV-", ""), 10)
+              const numB = Number.parseInt(b.shipmentNumber.replace("ENV-", ""), 10)
+              return numB - numA // Descending order (newest first)
+            })
+
+            setShipments(shipmentsArray)
+          } else {
+            setShipments([])
+          }
+          setIsLoading(false)
+          setIsRefreshing(false)
+        },
+        (error) => {
+          console.error("Error fetching shipments:", error)
+          toast({
+            title: "Error",
+            description: "No se pudieron cargar los envíos. Por favor, intente de nuevo.",
+            variant: "destructive",
+          })
+          setShipments([])
+          setIsLoading(false)
+          setIsRefreshing(false)
+        },
       )
+    } catch (error) {
+      console.error("Error setting up shipments listener:", error)
+      toast({
+        title: "Error",
+        description: "Error al procesar las fechas. Por favor, seleccione fechas válidas.",
+        variant: "destructive",
+      })
+      setDateError("Error al procesar las fechas. Por favor, seleccione fechas válidas.")
+      setShipments([])
+      setIsLoading(false)
+      setIsRefreshing(false)
     }
-
-    // Apply status filter
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((shipment) => shipment.status === statusFilter)
-    }
-
-    // Apply transport filter
-    if (transportFilter !== "all") {
-      filtered = filtered.filter((shipment) => shipment.transport === transportFilter)
-    }
-
-    // Apply client filter
-    if (clientFilter !== "all") {
-      filtered = filtered.filter((shipment) => shipment.client === clientFilter)
-    }
-
-    setFilteredShipments(filtered)
-  }, [shipments, searchTerm, statusFilter, transportFilter, clientFilter])
-
-  const clearFilters = () => {
-    setSearchTerm("")
-    setStatusFilter("all")
-    setTransportFilter("all")
-    setClientFilter("all")
   }
 
-  const exportToPDF = () => {
-    const doc = new jsPDF()
+  const handleStartDateChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newDate = e.target.value
+      setStartDate(newDate)
 
-    // Add title
-    doc.setFontSize(16)
-    doc.text("Envíos por Fecha", 14, 15)
+      // Validar la fecha inmediatamente
+      if (!isValidDate(newDate)) {
+        setDateError("La fecha inicial no es válida. Por favor, seleccione una fecha correcta.")
+      } else if (dateError && isValidDate(endDate)) {
+        // Si hay un error pero ahora ambas fechas son válidas, limpiar el error
+        setDateError(null)
+      }
+    },
+    [dateError, endDate],
+  )
 
-    // Add date range
-    doc.setFontSize(12)
-    const dateRangeText = `Período: ${format(dateRange?.from || new Date(), "dd/MM/yyyy", { locale: es })} - ${format(dateRange?.to || new Date(), "dd/MM/yyyy", { locale: es })}`
-    doc.text(dateRangeText, 14, 25)
+  const handleEndDateChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newDate = e.target.value
+      setEndDate(newDate)
 
-    // Prepare table data
-    const tableData = filteredShipments.map((shipment) => [
-      shipment.shipmentNumber || "",
-      format(new Date(shipment.date), "dd/MM/yyyy", { locale: es }),
-      shipment.client || "",
-      shipment.transport || "",
-      shipment.packages?.toString() || "0",
-      shipment.pallets?.toString() || "0",
-      shipment.status === "sent" ? "Enviado" : "Pendiente",
-      shipment.invoiceNumber || "",
-      shipment.remitNumber || "",
-      shipment.deliveryNote || "",
-    ])
+      // Validar la fecha inmediatamente
+      if (!isValidDate(newDate)) {
+        setDateError("La fecha final no es válida. Por favor, seleccione una fecha correcta.")
+      } else if (dateError && isValidDate(startDate)) {
+        // Si hay un error pero ahora ambas fechas son válidas, limpiar el error
+        setDateError(null)
+      }
+    },
+    [dateError, startDate],
+  )
 
-    // Add table
-    ;(doc as any).autoTable({
-      head: [
-        [
-          "N° Envío",
-          "Fecha",
-          "Cliente",
-          "Transporte",
-          "Bultos",
-          "Pallets",
-          "Estado",
-          "Factura",
-          "Remito",
-          "Nota Entrega",
-        ],
-      ],
-      body: tableData,
-      startY: 35,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [66, 139, 202] },
+  const handleRefresh = useCallback(() => {
+    if (isValidDate(startDate) && isValidDate(endDate)) {
+      setIsRefreshing(true)
+      setDateError(null)
+      setupShipmentsListener(startDate, endDate)
+    } else {
+      setDateError("No se puede actualizar con fechas inválidas. Por favor, corrija las fechas.")
+    }
+  }, [startDate, endDate])
+
+  // Función para manejar la actualización de un envío
+  const handleShipmentUpdate = useCallback((updatedShipment: ExtendedShipment) => {
+    // No need to manually update state as the real-time listener will handle it
+    toast({
+      title: "Envío actualizado",
+      description: `El envío ${updatedShipment.shipmentNumber} ha sido actualizado correctamente.`,
+      duration: 3000,
     })
+  }, [])
 
-    doc.save(`envios-${format(new Date(), "yyyy-MM-dd")}.pdf`)
+  // Función para manejar la eliminación de un envío
+  const handleShipmentDelete = useCallback((deletedShipmentId: string) => {
+    // No need to manually update state as the real-time listener will handle it
+    toast({
+      title: "Envío eliminado",
+      description: "El envío ha sido eliminado correctamente.",
+      duration: 3000,
+    })
+  }, [])
+
+  const handleExportPDF = async () => {
+    if (shipments.length === 0) return
+
+    try {
+      setIsExporting(true)
+
+      // Crear un nuevo documento PDF en orientación horizontal (landscape)
+      const doc = new jsPDF({
+        orientation: "landscape", // Formato horizontal
+        unit: "mm",
+        format: "a4",
+      })
+
+      // Cargar el logo de Gemico
+      const logoUrl =
+        "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
+
+      // Función para añadir el logo y encabezado a cada página
+      const addHeaderToPage = (doc) => {
+        try {
+          // Añadir logo
+          doc.addImage(logoUrl, "PNG", 14, 10, 30, 15)
+
+          // Añadir título
+          const formattedStartDate = format(new Date(`${startDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+          const formattedEndDate = format(new Date(`${endDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+          doc.setFontSize(16)
+          doc.text(`Envíos del ${formattedStartDate} al ${formattedEndDate}`, 50, 18)
+        } catch (error) {
+          console.error("Error adding header to PDF:", error)
+          // Fallback simple si hay error
+          doc.setFontSize(16)
+          doc.text("Plantilla de Envíos", 50, 18)
+        }
+      }
+
+      // Añadir logo y título a la primera página
+      addHeaderToPage(doc)
+
+      // Preparar datos para la tabla
+      const tableData = shipments.map((shipment) => [
+        shipment.shipmentNumber,
+        safeFormatDate(shipment.date, "dd/MM/yyyy"),
+        shipment.clientCode || "-", // Código Cliente antes que Cliente
+        shipment.client || "-",
+        shipment.transport || "-",
+        formatPalletsAndPackages(shipment.pallets, shipment.packages), // Formato actualizado
+        (shipment.weight ? safeFormatNumber(shipment.weight) : "0.00") + " kg",
+        "$ " + (shipment.declaredValue ? safeFormatNumber(shipment.declaredValue) : "0.00"),
+        "$ " + (shipment.shippingCost ? safeFormatNumber(shipment.shippingCost) : "0.00"), // Nuevo campo
+        shipment.invoiceNumber || "-", // Add invoice number
+        shipment.remitNumber || "-",
+        shipment.deliveryNote || "Sin nota", // Nueva columna para nota de entrega
+        shipment.orderNote || "Sin nota", // Nueva columna para nota de pedido
+        shipment.status === "sent" ? "ENVIADO" : "PENDIENTE", // Estado en MAYÚSCULAS
+        shipment.remitoTriplicado ? "Recibido" : "Pendiente", // Remito Triplicado con primera letra mayúscula
+        shipment.notes || "-",
+      ])
+
+      // Definir cabeceras de la tabla
+      const headers = [
+        "Nº Envío",
+        "Fecha",
+        "Código Cliente", // Código Cliente antes que Cliente
+        "Cliente",
+        "Transporte",
+        "Pallets/Bultos", // Actualizado
+        "Peso",
+        "Valor",
+        "Costo Envío", // Nueva columna
+        "Factura",
+        "Remito",
+        "Nota Entrega", // Nueva columna
+        "Nota Pedido", // Nueva columna
+        "Estado",
+        "Remito Triplicado", // Nueva columna
+        "Observaciones",
+      ]
+
+      // Calcular el ancho total de la página en mm
+      const pageWidth = doc.internal.pageSize.getWidth()
+
+      // Calcular el ancho total de la tabla (suma de todos los anchos de columna)
+      const totalTableWidth = 18 + 18 + 18 + 30 + 22 + 18 + 18 + 18 + 18 + 18 + 18 + 20 + 20 + 18 + 22 + 30
+
+      // Calcular los márgenes laterales para centrar la tabla
+      const leftMargin = (pageWidth - totalTableWidth) / 2
+
+      // Generar la tabla - ajustando anchos para que quepa en A4 horizontal y use todo el ancho disponible
+      autoTable(doc, {
+        head: [headers],
+        body: tableData,
+        startY: 30, // Empezar más abajo para dejar espacio al logo
+        styles: {
+          fontSize: 6,
+          cellPadding: 1,
+          halign: "center", // Centrar horizontalmente todo el texto
+          valign: "middle", // Centrar verticalmente todo el texto
+        },
+        columnStyles: {
+          0: { cellWidth: 18 }, // Nº Envío
+          1: { cellWidth: 18 }, // Fecha
+          2: { cellWidth: 18 }, // Código Cliente
+          3: { cellWidth: 30 }, // Cliente
+          4: { cellWidth: 22 }, // Transporte
+          5: { cellWidth: 18 }, // Pallets/Bultos
+          6: { cellWidth: 18 }, // Peso
+          7: { cellWidth: 18 }, // Valor
+          8: { cellWidth: 18 }, // Costo Envío
+          9: { cellWidth: 18 }, // Factura
+          10: { cellWidth: 18 }, // Remito
+          11: { cellWidth: 20 }, // Nota Entrega
+          12: { cellWidth: 20 }, // Nota Pedido
+          13: { cellWidth: 18 }, // Estado
+          14: { cellWidth: 22 }, // Remito Triplicado
+          15: { cellWidth: 30 }, // Observaciones
+        },
+        margin: {
+          top: 30,
+          left: leftMargin, // Centrar la tabla horizontalmente
+          right: leftMargin, // Centrar la tabla horizontalmente
+          bottom: 15,
+        },
+        didDrawPage: (data) => {
+          // Si no es la primera página, añadir logo y encabezado
+          if (data.pageNumber > 1) {
+            addHeaderToPage(doc)
+          }
+        },
+      })
+
+      // Añadir pie de página con fecha de generación
+      const pageCount = doc.internal.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.text(
+          `Generado el ${safeFormatDate(new Date(), "dd/MM/yyyy HH:mm", { locale: es })} - Página ${i} de ${pageCount}`,
+          doc.internal.pageSize.getWidth() / 2,
+          doc.internal.pageSize.getHeight() - 10,
+          { align: "center" },
+        )
+      }
+
+      // Guardar el PDF
+      const formattedStartDate = startDate.replace(/-/g, "")
+      const formattedEndDate = endDate.replace(/-/g, "")
+      let pdfFileName = ""
+      if (startDate === endDate) {
+        // Single day
+        pdfFileName = `Plantilla Envios-${formattedStartDate}.pdf`
+      } else {
+        // Date range
+        pdfFileName = `Plantilla Envios-${formattedStartDate}-${formattedEndDate}.pdf`
+      }
+      doc.save(pdfFileName)
+    } catch (error) {
+      console.error("Error al generar el PDF:", error)
+      toast({
+        title: "Error",
+        description: "Error al generar el PDF. Por favor, intente de nuevo.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsExporting(false)
+    }
   }
 
-  const exportToExcel = () => {
-    const excelData = filteredShipments.map((shipment) => ({
-      "N° Envío": shipment.shipmentNumber || "",
-      Fecha: format(new Date(shipment.date), "dd/MM/yyyy", { locale: es }),
-      Cliente: shipment.client || "",
-      Transporte: shipment.transport || "",
-      Bultos: shipment.packages || 0,
-      Pallets: shipment.pallets || 0,
-      Estado: shipment.status === "sent" ? "Enviado" : "Pendiente",
-      Factura: shipment.invoiceNumber || "",
-      Remito: shipment.remitNumber || "",
-      "Nota Entrega": shipment.deliveryNote || "",
-      Dirección: shipment.clientAddress || "",
-      "Peso (kg)": shipment.weight || 0,
-      "Valor Declarado": shipment.declaredValue || 0,
-      "Costo Envío": shipment.shippingCost || 0,
-      Aclaraciones: shipment.notes || "",
-    }))
+  const handleSendPdfByEmail = async () => {
+    if (shipments.length === 0) return
 
-    const ws = XLSX.utils.json_to_sheet(excelData)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "Envíos")
+    // Validar fechas antes de proceder
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      toast({
+        title: "Error",
+        description: "No se puede enviar el correo con fechas inválidas. Por favor, corrija las fechas.",
+        variant: "destructive",
+      })
+      return
+    }
 
-    XLSX.writeFile(wb, `envios-${format(new Date(), "yyyy-MM-dd")}.xlsx`)
+    setIsSending(true)
+    try {
+      // Crear un nuevo documento PDF en orientación horizontal (landscape)
+      const doc = new jsPDF({
+        orientation: "landscape", // Formato horizontal
+        unit: "mm",
+        format: "a4",
+      })
+
+      // Cargar el logo de Gemico
+      const logoUrl =
+        "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
+
+      // Función para añadir el logo y encabezado a cada página
+      const addHeaderToPage = (doc) => {
+        try {
+          // Añadir logo
+          doc.addImage(logoUrl, "PNG", 14, 10, 30, 15)
+
+          // Añadir título
+          const formattedStartDate = format(new Date(`${startDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+          const formattedEndDate = format(new Date(`${endDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+          doc.setFontSize(16)
+          doc.text(`Envíos del ${formattedStartDate} al ${formattedEndDate}`, 50, 18)
+        } catch (error) {
+          console.error("Error adding header to PDF:", error)
+          // Fallback simple si hay error
+          doc.setFontSize(16)
+          doc.text("Plantilla de Envíos", 50, 18)
+        }
+      }
+
+      // Añadir logo y título a la primera página
+      addHeaderToPage(doc)
+
+      // Preparar datos para la tabla
+      const tableData = shipments.map((shipment) => [
+        shipment.shipmentNumber,
+        safeFormatDate(shipment.date, "dd/MM/yyyy"),
+        shipment.clientCode || "-", // Código Cliente antes que Cliente
+        shipment.client || "-",
+        shipment.transport || "-",
+        formatPalletsAndPackages(shipment.pallets, shipment.packages), // Formato actualizado
+        (shipment.weight ? safeFormatNumber(shipment.weight) : "0.00") + " kg",
+        "$ " + (shipment.declaredValue ? safeFormatNumber(shipment.declaredValue) : "0.00"),
+        "$ " + (shipment.shippingCost ? safeFormatNumber(shipment.shippingCost) : "0.00"), // Nuevo campo
+        shipment.invoiceNumber || "-", // Add invoice number
+        shipment.remitNumber || "-",
+        shipment.deliveryNote || "Sin nota", // Nueva columna para nota de entrega
+        shipment.orderNote || "Sin nota", // Nueva columna para nota de pedido
+        shipment.status === "sent" ? "ENVIADO" : "PENDIENTE", // Estado en MAYÚSCULAS
+        shipment.remitoTriplicado ? "Recibido" : "Pendiente", // Remito Triplicado con primera letra mayúscula
+        shipment.notes || "-",
+      ])
+
+      // Definir cabeceras de la tabla
+      const headers = [
+        "Nº Envío",
+        "Fecha",
+        "Código Cliente", // Código Cliente antes que Cliente
+        "Cliente",
+        "Transporte",
+        "Pallets/Bultos", // Actualizado
+        "Peso",
+        "Valor",
+        "Costo Envío", // Nueva columna
+        "Factura",
+        "Remito",
+        "Nota Entrega", // Nueva columna
+        "Nota Pedido", // Nueva columna
+        "Estado",
+        "Remito Triplicado", // Nueva columna
+        "Observaciones",
+      ]
+
+      // Calcular el ancho total de la página en mm
+      const pageWidth = doc.internal.pageSize.getWidth()
+
+      // Calcular el ancho total de la tabla (suma de todos los anchos de columna)
+      const totalTableWidth = 18 + 18 + 18 + 30 + 22 + 18 + 18 + 18 + 18 + 18 + 18 + 20 + 20 + 18 + 22 + 30
+
+      // Calcular los márgenes laterales para centrar la tabla
+      const leftMargin = (pageWidth - totalTableWidth) / 2
+
+      // Generar la tabla - ajustando anchos para que quepa en A4 horizontal y use todo el ancho disponible
+      autoTable(doc, {
+        head: [headers],
+        body: tableData,
+        startY: 30, // Empezar más abajo para dejar espacio al logo
+        styles: {
+          fontSize: 6,
+          cellPadding: 1,
+          halign: "center", // Centrar horizontalmente todo el texto
+          valign: "middle", // Centrar verticalmente todo el texto
+        },
+        columnStyles: {
+          0: { cellWidth: 18 }, // Nº Envío
+          1: { cellWidth: 18 }, // Fecha
+          2: { cellWidth: 18 }, // Código Cliente
+          3: { cellWidth: 30 }, // Cliente
+          4: { cellWidth: 22 }, // Transporte
+          5: { cellWidth: 18 }, // Pallets/Bultos
+          6: { cellWidth: 18 }, // Peso
+          7: { cellWidth: 18 }, // Valor
+          8: { cellWidth: 18 }, // Costo Envío
+          9: { cellWidth: 18 }, // Factura
+          10: { cellWidth: 18 }, // Remito
+          11: { cellWidth: 20 }, // Nota Entrega
+          12: { cellWidth: 20 }, // Nota Pedido
+          13: { cellWidth: 18 }, // Estado
+          14: { cellWidth: 22 }, // Remito Triplicado
+          15: { cellWidth: 30 }, // Observaciones
+        },
+        margin: {
+          top: 30,
+          left: leftMargin, // Centrar la tabla horizontalmente
+          right: leftMargin, // Centrar la tabla horizontalmente
+          bottom: 15,
+        },
+        didDrawPage: (data) => {
+          // Si no es la primera página, añadir logo y encabezado
+          if (data.pageNumber > 1) {
+            addHeaderToPage(doc)
+          }
+        },
+      })
+
+      // Convertir el PDF a base64
+      const pdfBase64 = doc.output("datauristring").split(",")[1]
+
+      // Formatear las fechas para el asunto del correo
+      const formattedStartDate = format(new Date(`${startDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+      const formattedEndDate = format(new Date(`${endDate}T12:00:00`), "dd/MM/yyyy", { locale: es })
+
+      // Prepare email subject and body text based on date selection
+      let emailSubject = ""
+      let emailBodyText = ""
+
+      if (startDate === endDate) {
+        // Single day
+        emailSubject = `PLANTILLA DE ENVIOS - ${formattedStartDate}`
+        emailBodyText = `Adjunto encontrará la plantilla de envíos del ${formattedStartDate}.`
+      } else {
+        // Date range
+        emailSubject = `PLANTILLA DE ENVIOS - FECHAS COMPRENDIDAS ${formattedStartDate} al ${formattedEndDate}`
+        emailBodyText = `Adjunto encontrará la plantilla de envíos de las fechas comprendidas entre el ${formattedStartDate} y el ${formattedEndDate}.`
+      }
+
+      // Preparar los datos para enviar al endpoint
+      const emailData = {
+        to: [
+          "ventas@gemico.com.ar",
+          "equipo@gemico.com.ar",
+          "soporte@gemico.com.ar",
+          "deposito@gemico.com.ar",
+          "nicolasmartincossi@gmail.com",
+        ],
+        subject: emailSubject,
+        html: `
+          <h2>Plantilla de Envíos</h2>
+          <p>${emailBodyText}</p>
+          <p>Este correo ha sido generado automáticamente desde el sistema de gestión de envíos de Gemico.</p>
+        `,
+        pdfBase64: pdfBase64,
+        pdfFilename:
+          startDate === endDate
+            ? `Plantilla Envios-${startDate.replace(/-/g, "")}.pdf`
+            : `Plantilla Envios-${startDate.replace(/-/g, "")}-${endDate.replace(/-/g, "")}.pdf`,
+      }
+
+      // Enviar el correo electrónico usando la API existente
+      const response = await fetch("/api/send-email-plantilla", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(emailData),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || "Error al enviar el correo electrónico")
+      }
+
+      toast({
+        title: "Correo enviado",
+        description: `La plantilla de envíos ha sido enviada a los destinatarios especificados.`,
+        duration: 5000,
+      })
+    } catch (error) {
+      console.error("Error al enviar el PDF por correo:", error)
+      toast({
+        title: "Error",
+        description: `No se pudo enviar el correo: ${error.message}`,
+        variant: "destructive",
+        duration: 5000,
+      })
+    } finally {
+      setIsSending(false)
+    }
   }
 
-  const getStatusBadge = (status: string) => {
-    return status === "sent" ? (
-      <Badge variant="default" className="bg-green-500">
-        Enviado
-      </Badge>
-    ) : (
-      <Badge variant="secondary">Pendiente</Badge>
-    )
+  const handleExportExcel = async () => {
+    if (shipments.length === 0) return
+
+    // Validar fechas antes de proceder
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      toast({
+        title: "Error",
+        description: "No se puede exportar con fechas inválidas. Por favor, corrija las fechas.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Prepare data for Excel with the requested formatting
+      const data = shipments.map((shipment) => ({
+        "Número de Envío": shipment.shipmentNumber,
+        Fecha: safeFormatDate(shipment.date, "dd/MM/yyyy", { locale: es }),
+        "Código Cliente": shipment.clientCode || "-",
+        Cliente: shipment.client || "-",
+        Transporte: shipment.transport || "-",
+        "Pallets/Bultos": formatPalletsAndPackages(shipment.pallets, shipment.packages),
+        "Peso (kg)": shipment.weight ? Number(shipment.weight).toFixed(2) : "0.00",
+        "Valor Declarado ($)": shipment.declaredValue ? "$ " + Number(shipment.declaredValue).toFixed(2) : "$ 0.00",
+        "Costo de Envío ($)": shipment.shippingCost ? "$ " + Number(shipment.shippingCost).toFixed(2) : "$ 0.00", // Nuevo campo
+        Factura: shipment.invoiceNumber || "-",
+        Remito: shipment.remitNumber || "-",
+        "Nota de Entrega": shipment.deliveryNote || "Sin nota", // Nueva columna
+        "Nota de Pedido": shipment.orderNote || "Sin nota", // Nueva columna
+        // Estado en MAYÚSCULAS
+        Estado: shipment.status === "sent" ? "ENVIADO" : "PENDIENTE",
+        // Remito Triplicado con primera letra mayúscula
+        "Remito Triplicado": shipment.remitoTriplicado ? "Recibido" : "Pendiente",
+        Observaciones: shipment.notes || "-",
+      }))
+
+      // Create worksheet
+      const ws = XLSX.utils.json_to_sheet(data)
+
+      // Aplicar estilos para reducir el tamaño de la fuente
+      // Definir un estilo con fuente pequeña
+      const smallFontStyle = { font: { sz: 8 } } // Tamaño de fuente 8pt
+
+      // Obtener el rango de celdas (todas las celdas con datos)
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1")
+
+      // Si no existe la propiedad !cols, crearla
+      if (!ws["!cols"]) ws["!cols"] = []
+
+      // Aplicar ancho automático a todas las columnas
+      for (let i = range.s.c; i <= range.e.c; i++) {
+        ws["!cols"][i] = { wch: 12 } // Ancho predeterminado
+      }
+
+      // Ajustar anchos específicos para algunas columnas
+      ws["!cols"][3] = { wch: 20 } // Cliente
+      ws["!cols"][4] = { wch: 20 } // Transporte
+      ws["!cols"][11] = { wch: 20 } // Nota de Entrega
+      ws["!cols"][12] = { wch: 20 } // Nota de Pedido
+      ws["!cols"][15] = { wch: 25 } // Observaciones
+
+      // Si no existe la propiedad !rows, crearla
+      if (!ws["!rows"]) ws["!rows"] = []
+
+      // Aplicar altura reducida a todas las filas
+      for (let i = range.s.r; i <= range.e.r; i++) {
+        ws["!rows"][i] = { hpt: 12 } // Altura reducida
+      }
+
+      // Create workbook
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Envíos")
+
+      // Generate Excel file
+      const formattedStartDate = startDate.replace(/-/g, "")
+      const formattedEndDate = endDate.replace(/-/g, "")
+      let excelFileName = ""
+      if (startDate === endDate) {
+        // Single day
+        excelFileName = `Plantilla Envios-${formattedStartDate}.xlsx`
+      } else {
+        // Date range
+        excelFileName = `Plantilla Envios-${formattedStartDate}-${formattedEndDate}.xlsx`
+      }
+      XLSX.writeFile(wb, excelFileName)
+    } catch (error) {
+      console.error("Error al generar el Excel:", error)
+      toast({
+        title: "Error",
+        description: "Error al generar el Excel. Por favor, intente de nuevo.",
+        variant: "destructive",
+      })
+    }
   }
+
+  // Función mejorada para filtrar envíos con búsqueda optimizada
+  const filteredShipments = useMemo(() => {
+    if (!Array.isArray(shipments)) {
+      console.warn("filteredShipments recibió un valor no iterable:", shipments)
+      return []
+    }
+
+    if (!searchTerm || searchTerm.trim() === "") {
+      return shipments
+    }
+
+    const searchTermTrimmed = searchTerm.trim()
+    const searchTermLower = searchTermTrimmed.toLowerCase()
+
+    // Si el término de búsqueda es solo números, buscar coincidencias numéricas más flexibles
+    const isNumericSearch = /^\d+$/.test(searchTermTrimmed)
+
+    return shipments.filter((shipment) => {
+      // Función helper para buscar en campos de texto
+      const searchInField = (field: string | undefined | null) => {
+        if (!field) return false
+
+        const fieldStr = String(field)
+
+        if (isNumericSearch) {
+          // Para búsquedas numéricas, remover espacios, guiones y otros caracteres especiales
+          const cleanField = fieldStr.replace(/[-\s_.]/g, "")
+          return cleanField.includes(searchTermTrimmed)
+        } else {
+          // Para búsquedas de texto, usar el método normal
+          return fieldStr.toLowerCase().includes(searchTermLower)
+        }
+      }
+
+      // Buscar en todos los campos relevantes
+      return (
+        searchInField(shipment.client) ||
+        searchInField(shipment.transport) ||
+        searchInField(shipment.shipmentNumber) ||
+        searchInField(shipment.clientCode) ||
+        searchInField(shipment.invoiceNumber) ||
+        searchInField(shipment.remitNumber) ||
+        searchInField(shipment.deliveryNote) ||
+        searchInField(shipment.orderNote)
+      )
+    })
+  }, [shipments, searchTerm])
+
+  // Debounce para la búsqueda
+  const debouncedSetSearchTerm = useCallback(
+    debounce((value: string) => {
+      setSearchTerm(value)
+    }, 300),
+    [],
+  )
+
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    debouncedSetSearchTerm(e.target.value)
+  }
+
+  // Función para limpiar la búsqueda
+  const clearSearch = () => {
+    setSearchTerm("")
+    // También limpiar el campo de entrada
+    const searchInput = document.getElementById("search-input") as HTMLInputElement
+    if (searchInput) {
+      searchInput.value = ""
+    }
+  }
+
+  const dateRangeText = useCallback(() => {
+    try {
+      if (startDate === endDate) {
+        return safeFormatDate(new Date(`${startDate}T12:00:00`), "dd 'de' MMMM 'de' yyyy", { locale: es })
+      } else {
+        const formattedStartDate = safeFormatDate(new Date(`${startDate}T12:00:00`), "dd 'de' MMMM 'de' yyyy", {
+          locale: es,
+        })
+        const formattedEndDate = safeFormatDate(new Date(`${endDate}T12:00:00`), "dd 'de' MMMM 'de' yyyy", {
+          locale: es,
+        })
+        return `${formattedStartDate} al ${formattedEndDate}`
+      }
+    } catch (error) {
+      console.error("Error formatting date range text:", error)
+      return "Rango de fechas seleccionado"
+    }
+  }, [startDate, endDate])
 
   return (
-    <div className="container mx-auto p-6">
-      <Card>
+    <div className="w-full p-4 px-[100px] pt-[50px]">
+      <div className="flex items-center justify-between mb-6">
+        <Button variant="outline" onClick={() => router.push("/dashboard")} className="print:hidden">
+          <ArrowLeft className="mr-2 h-4 w-4" /> Volver al Dashboard
+        </Button>
+        <h1 className="text-2xl font-bold">Envíos por Fecha</h1>
+      </div>
+
+      {dateError && (
+        <Alert variant="destructive" className="mb-4 mx-4">
+          <AlertTitle>Error de fecha</AlertTitle>
+          <AlertDescription>{dateError}</AlertDescription>
+        </Alert>
+      )}
+
+      <Card className="mb-6 print:hidden">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CalendarIcon className="h-5 w-5" />
-            Envíos por Fecha
-          </CardTitle>
+          <CardTitle>Seleccionar Rango de Fechas</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Date Range Picker */}
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+        <CardContent>
+          <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
             <div className="flex-1">
-              <Label>Rango de Fechas</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    id="date"
-                    variant="outline"
-                    className={cn("w-full justify-start text-left font-normal", !dateRange && "text-muted-foreground")}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {dateRange?.from ? (
-                      dateRange.to ? (
-                        <>
-                          {format(dateRange.from, "dd/MM/yyyy", { locale: es })} -{" "}
-                          {format(dateRange.to, "dd/MM/yyyy", { locale: es })}
-                        </>
-                      ) : (
-                        format(dateRange.from, "dd/MM/yyyy", { locale: es })
-                      )
-                    ) : (
-                      <span>Seleccionar fechas</span>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={dateRange}
-                    onSelect={setDateRange}
-                    numberOfMonths={2}
-                    locale={es}
-                  />
-                </PopoverContent>
-              </Popover>
+              <Label htmlFor="startDate">Fecha Inicial</Label>
+              <div className="relative">
+                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="startDate"
+                  type="date"
+                  value={startDate}
+                  onChange={handleStartDateChange}
+                  className="pl-8 mt-1"
+                />
+              </div>
             </div>
-            <Button onClick={loadShipments} disabled={loading || !dateRange?.from || !dateRange?.to}>
-              {loading ? "Cargando..." : "Buscar Envíos"}
-            </Button>
+            <div className="flex-1">
+              <Label htmlFor="endDate">Fecha Final</Label>
+              <div className="relative">
+                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input id="endDate" type="date" value={endDate} onChange={handleEndDateChange} className="pl-8 mt-1" />
+              </div>
+            </div>
+            <div className="flex items-end space-x-2">
+              <Button
+                onClick={handleSendPdfByEmail}
+                disabled={shipments.length === 0 || isSending || dateError !== null}
+              >
+                {isSending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...
+                  </>
+                ) : (
+                  <>
+                    <Mail className="mr-2 h-4 w-4" /> Enviar por Email
+                  </>
+                )}
+              </Button>
+
+              <Button
+                onClick={handleExportPDF}
+                disabled={shipments.length === 0 || dateError !== null || isExporting}
+                variant="outline"
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Exportando...
+                  </>
+                ) : (
+                  <>
+                    <FileDown className="mr-2 h-4 w-4" /> Exportar PDF
+                  </>
+                )}
+              </Button>
+
+              <Button
+                onClick={handleExportExcel}
+                disabled={shipments.length === 0 || dateError !== null}
+                variant="outline"
+              >
+                <FileDown className="mr-2 h-4 w-4" /> Exportar Excel
+              </Button>
+            </div>
           </div>
-
-          {/* Filters and Search */}
-          {shipments.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row gap-4">
-                <div className="flex-1">
-                  <Label htmlFor="search">Buscar</Label>
-                  <div className="relative">
-                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="search"
-                      placeholder="Buscar por número, cliente, transporte, factura, remito, nota entrega..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-8"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-4">
-                <div className="flex-1">
-                  <Label>Estado</Label>
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos los estados</SelectItem>
-                      <SelectItem value="pending">Pendiente</SelectItem>
-                      <SelectItem value="sent">Enviado</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex-1">
-                  <Label>Transporte</Label>
-                  <Select value={transportFilter} onValueChange={setTransportFilter}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos los transportes</SelectItem>
-                      {uniqueTransports.map((transport) => (
-                        <SelectItem key={transport} value={transport}>
-                          {transport}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex-1">
-                  <Label>Cliente</Label>
-                  <Select value={clientFilter} onValueChange={setClientFilter}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos los clientes</SelectItem>
-                      {uniqueClients.map((client) => (
-                        <SelectItem key={client} value={client}>
-                          {client}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="flex items-end">
-                  <Button variant="outline" onClick={clearFilters} size="icon">
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Export Buttons */}
-          {filteredShipments.length > 0 && (
-            <div className="flex gap-2">
-              <Button onClick={exportToPDF} variant="outline" size="sm">
-                <FileText className="mr-2 h-4 w-4" />
-                Exportar PDF
-              </Button>
-              <Button onClick={exportToExcel} variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Exportar Excel
-              </Button>
-            </div>
-          )}
-
-          {/* Results Summary */}
-          {shipments.length > 0 && (
-            <div className="text-sm text-muted-foreground">
-              Mostrando {filteredShipments.length} de {shipments.length} envíos
-              {searchTerm || statusFilter !== "all" || transportFilter !== "all" || clientFilter !== "all"
-                ? " (filtrados)"
-                : ""}
-            </div>
-          )}
-
-          {/* Shipments Table */}
-          {filteredShipments.length > 0 && (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>N° Envío</TableHead>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Transporte</TableHead>
-                    <TableHead>Bultos</TableHead>
-                    <TableHead>Pallets</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Factura</TableHead>
-                    <TableHead>Remito</TableHead>
-                    <TableHead>Nota Entrega</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredShipments.map((shipment) => (
-                    <TableRow
-                      key={shipment.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => setSelectedShipment(shipment)}
-                    >
-                      <TableCell className="font-medium">{shipment.shipmentNumber}</TableCell>
-                      <TableCell>{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</TableCell>
-                      <TableCell>{shipment.client}</TableCell>
-                      <TableCell>{shipment.transport}</TableCell>
-                      <TableCell>{shipment.packages}</TableCell>
-                      <TableCell>{shipment.pallets || 0}</TableCell>
-                      <TableCell>{getStatusBadge(shipment.status)}</TableCell>
-                      <TableCell>{shipment.invoiceNumber || "-"}</TableCell>
-                      <TableCell>{shipment.remitNumber || "-"}</TableCell>
-                      <TableCell>{shipment.deliveryNote || "-"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {/* No Results */}
-          {!loading && shipments.length === 0 && dateRange?.from && dateRange?.to && (
-            <div className="text-center py-8 text-muted-foreground">
-              No se encontraron envíos en el rango de fechas seleccionado.
-            </div>
-          )}
-
-          {!loading && filteredShipments.length === 0 && shipments.length > 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              No se encontraron envíos que coincidan con los filtros aplicados.
-            </div>
-          )}
         </CardContent>
       </Card>
 
-      {/* Shipment Detail Modal */}
-      {selectedShipment && (
-        <ShipmentDetailModal
-          shipment={selectedShipment}
-          onClose={() => setSelectedShipment(null)}
-          showPrintButton={false}
-        />
-      )}
+      <div className="print:hidden mb-4">
+        <div className="relative w-full max-w-sm">
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            id="search-input"
+            placeholder="Buscar por cliente, transporte, factura, remito, nota de entrega, nota de pedido..."
+            className="pl-8 pr-10"
+            defaultValue={searchTerm}
+            onChange={handleSearchChange}
+          />
+          {searchTerm && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="absolute right-0 top-0 h-9 w-9 p-0"
+              onClick={clearSearch}
+              title="Limpiar búsqueda"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+        {searchTerm && (
+          <div className="mt-2 text-sm text-muted-foreground">
+            Mostrando resultados para: <span className="font-medium">{searchTerm}</span>
+            {Array.isArray(filteredShipments) && (
+              <span className="ml-2">
+                ({filteredShipments.length} de {shipments.length} envíos)
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="print:mb-4">
+        <h2 className="text-xl font-bold mb-4 print:text-center">Envíos del {dateRangeText()}</h2>
+
+        {isLoading ? (
+          <div className="text-center py-8">Cargando envíos...</div>
+        ) : !Array.isArray(shipments) || shipments.length === 0 ? (
+          <div className="text-center py-8">
+            <p className="text-lg text-muted-foreground">No hay envíos para este rango de fechas.</p>
+          </div>
+        ) : (
+          <Tabs defaultValue="todos" className="w-full">
+            <TabsList>
+              <TabsTrigger value="todos">Todos</TabsTrigger>
+              <TabsTrigger value="pendientes">Pendientes</TabsTrigger>
+              <TabsTrigger value="recibidos">Recibidos</TabsTrigger>
+            </TabsList>
+            <TabsContent value="todos">
+              <ShipmentList
+                shipments={filteredShipments}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+
+            <TabsContent value="pendientes">
+              <ShipmentList
+                shipments={filteredShipments.filter(
+                  (shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false,
+                )}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+
+            <TabsContent value="recibidos">
+              <ShipmentList
+                shipments={filteredShipments.filter((shipment) => shipment.remitoTriplicado === true)}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+          </Tabs>
+        )}
+
+        <div className="mt-4 text-right print:hidden">
+          <p className="text-sm text-muted-foreground">
+            Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}
+          </p>
+        </div>
+
+        <div className="mt-8 print:block hidden">
+          <div className="flex justify-between border-t pt-4">
+            <div>
+              <p>Fecha de impresión: {safeFormatDate(new Date(), "dd/MM/yyyy HH:mm", { locale: es })}</p>
+            </div>
+            <div>
+              <p>Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

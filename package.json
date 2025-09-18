@@ -67,7 +67,7 @@
     "papaparse": "latest",
     "qrcode": "latest",
     "react": "^18",
-    "react-day-picker": "latest",
+    "react-day-picker": "8.10.1",
     "react-dom": "^18",
     "react-hook-form": "^7.54.1",
     "react-resizable-panels": "^2.1.7",
