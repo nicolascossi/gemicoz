@@ -32,14 +32,36 @@ export default function PrintLabelsPage() {
       if (snapshot.exists()) {
         const shipmentData = { id: snapshot.key, ...snapshot.val() } as Shipment
         setShipment(shipmentData)
-        setLabelCount(shipmentData.packages)
-        setCustomLabelCount(shipmentData.packages)
-        setLabels(Array.from({ length: shipmentData.packages }, (_, i) => i + 1))
+
+        // Determinar el total de etiquetas basado en bultos y pallets
+        const totalLabels = getTotalLabels(shipmentData)
+        setLabelCount(totalLabels)
+        setCustomLabelCount(totalLabels)
+        setLabels(Array.from({ length: totalLabels }, (_, i) => i + 1))
       }
     }
 
     fetchShipment()
   }, [params.id])
+
+  // Función para determinar el total de etiquetas
+  const getTotalLabels = (shipment: Shipment): number => {
+    const packages = shipment.packages || 0
+    const pallets = shipment.pallets || 0
+
+    // Si hay bultos, usar la cantidad de bultos
+    if (packages > 0) {
+      return packages
+    }
+
+    // Si no hay bultos pero hay pallets, usar la cantidad de pallets
+    if (pallets > 0) {
+      return pallets
+    }
+
+    // Si no hay ni bultos ni pallets, retornar 1 como mínimo
+    return 1
+  }
 
   const handlePrint = () => {
     window.print()
@@ -69,6 +91,7 @@ export default function PrintLabelsPage() {
   }
 
   const displayLabels = labelType === "numbered" ? labels : generateLabels()
+  const totalLabels = getTotalLabels(shipment)
 
   return (
     <div className="container mx-auto p-4 bg-white text-black">
@@ -88,12 +111,15 @@ export default function PrintLabelsPage() {
           <div className="flex items-center space-x-2 mb-2">
             <RadioGroupItem value="numbered" id="numbered" />
             <Label htmlFor="numbered">
-              Etiquetas numeradas (1/{shipment.packages}, 2/{shipment.packages}, etc.)
+              Etiquetas numeradas (1/{totalLabels}, 2/{totalLabels}, etc.)
             </Label>
           </div>
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="bulk" id="bulk" />
-            <Label htmlFor="bulk">Etiquetas con total de bultos ({shipment.packages} bultos)</Label>
+            <Label htmlFor="bulk">
+              Etiquetas con total de {shipment.packages > 0 ? "bultos" : "pallets"} ({totalLabels}{" "}
+              {shipment.packages > 0 ? "bultos" : "pallets"})
+            </Label>
           </div>
         </RadioGroup>
 
@@ -111,7 +137,9 @@ export default function PrintLabelsPage() {
                 onChange={handleCustomLabelCountChange}
                 className="w-24"
               />
-              <span>de {shipment.packages} bultos totales</span>
+              <span>
+                de {totalLabels} {shipment.packages > 0 ? "bultos" : "pallets"} totales
+              </span>
             </div>
           </div>
         )}
@@ -127,7 +155,7 @@ export default function PrintLabelsPage() {
             key={index}
             shipment={shipment}
             labelNumber={labelNumber}
-            totalLabels={shipment.packages}
+            totalLabels={totalLabels}
             isLast={index === displayLabels.length - 1}
             labelType={labelType}
           />

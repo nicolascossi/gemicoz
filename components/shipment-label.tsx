@@ -63,8 +63,9 @@ export default function ShipmentLabel({
       palletsLine = `${shipment.pallets} ${shipment.pallets === 1 ? "Pallet" : "Pallets"}`
     }
 
-    // Si hay packages
-    if (hasPackages) {
+    // Si hay packages (o si no hay ni pallets ni packages, mostrar bultos por defecto)
+    if (hasPackages || (!hasPallets && !hasPackages)) {
+      const packagesCount = shipment.packages || 0
       if (labelType === "numbered") {
         packagesLine = `Bulto ${labelNumber}/${totalLabels}`
       } else {
@@ -160,11 +161,6 @@ export default function ShipmentLabel({
                     <p className="text-lg">[{shipment.clientAddressTitle}]</p>
                   )}
                 </div>
-
-                {/* Si el título no está incluido en clientAddress pero existe en clientAddressTitle, mostrarlo */}
-                {/* {!shipment.clientAddress.includes("[") && shipment.clientAddressTitle && (
-                  <p className="text-lg mb-3">[{shipment.clientAddressTitle}]</p>
-                )} */}
               </div>
 
               {/* Transporte */}
