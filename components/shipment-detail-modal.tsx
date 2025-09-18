@@ -1,295 +1,399 @@
 "use client"
-
-import type React from "react"
-
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { CalendarIcon, Package, Printer, Eye, Save } from "lucide-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Loader2, Printer, Mail, Trash2, AlertCircle, ExternalLink, Download } from "lucide-react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
-import { cn } from "@/lib/utils"
-import type { Shipment, Client, Transport } from "@/lib/types"
-import Link from "next/link"
+import type { Shipment } from "@/lib/types"
+import { ref, update, remove } from "firebase/database"
+import { rtdb } from "@/lib/firebase"
+import { useToast } from "@/components/ui/use-toast"
+import { useRouter } from "next/navigation"
 
 interface ShipmentDetailModalProps {
-  isOpen: boolean
-  onClose: () => void
-  onSave: (shipment: Shipment) => void
   shipment: Shipment | null
-  clients: Client[]
-  transports: Transport[]
+  onClose: () => void
+  onUpdate?: (updatedShipment: Shipment) => void
+  onDelete?: (deletedShipmentId: string) => void
+  showPrintButton?: boolean
 }
 
 export default function ShipmentDetailModal({
-  isOpen,
-  onClose,
-  onSave,
   shipment,
-  clients,
-  transports,
+  onClose,
+  onUpdate,
+  onDelete,
+  showPrintButton = true,
 }: ShipmentDetailModalProps) {
-  const [formData, setFormData] = useState<Shipment | null>(null)
   const [isEditing, setIsEditing] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [editedShipment, setEditedShipment] = useState<Shipment | null>(null)
+  const { toast } = useToast()
+  const router = useRouter()
+
+  const [remitType, setRemitType] = useState<"R" | "X" | "RM">("R")
+  const [remitNumber, setRemitNumber] = useState("")
+  const [invoiceType, setInvoiceType] = useState<"A" | "B" | "E">("A")
+  const [invoiceNumber, setInvoiceNumber] = useState("")
 
   useEffect(() => {
     if (shipment) {
-      setFormData({
-        ...shipment,
-        date: typeof shipment.date === "string" ? shipment.date : shipment.date.toISOString(),
-      })
+      setEditedShipment({ ...shipment })
+      setError(null)
+
+      // Parse existing remit number
+      if (shipment.remitNumber) {
+        const remitMatch = shipment.remitNumber.match(/^(R|X|RM)\s*-\s*(?:00006\s*-\s*|R00001\s*-\s*)?(.+)$/)
+        if (remitMatch) {
+          setRemitType(remitMatch[1] as "R" | "X" | "RM")
+          setRemitNumber(remitMatch[2])
+        }
+      }
+
+      // Parse existing invoice number
+      if (shipment.invoiceNumber) {
+        const invoiceMatch = shipment.invoiceNumber.match(/^([ABE])\s*00001-(.+)$/)
+        if (invoiceMatch) {
+          setInvoiceType(invoiceMatch[1] as "A" | "B" | "E")
+          setInvoiceNumber(invoiceMatch[2])
+        }
+      }
     }
   }, [shipment])
 
-  const handleClientChange = (clientName: string) => {
-    const client = clients.find((c) => c.name === clientName)
-    if (formData) {
-      setFormData({
-        ...formData,
-        client: clientName,
-        clientAddress: client?.address || formData.clientAddress,
+  useEffect(() => {
+    if (editedShipment && remitNumber) {
+      if (remitType === "R") {
+        setEditedShipment((prev) => ({
+          ...prev!,
+          remitNumber: `${remitType} - 00006 - ${remitNumber}`,
+        }))
+      } else if (remitType === "X") {
+        setEditedShipment((prev) => ({
+          ...prev!,
+          remitNumber: `${remitType} - R00001 - ${remitNumber}`,
+        }))
+      } else if (remitType === "RM") {
+        setEditedShipment((prev) => ({
+          ...prev!,
+          remitNumber: `${remitType} - ${remitNumber}`,
+        }))
+      }
+    } else if (editedShipment) {
+      setEditedShipment((prev) => ({
+        ...prev!,
+        remitNumber: "",
+      }))
+    }
+  }, [remitType, remitNumber, editedShipment])
+
+  useEffect(() => {
+    if (editedShipment && invoiceNumber) {
+      let prefix = ""
+      if (invoiceType === "A") {
+        prefix = "A 00001-"
+      } else if (invoiceType === "B") {
+        prefix = "B 00001-"
+      } else if (invoiceType === "E") {
+        prefix = "E 00004-"
+      }
+
+      setEditedShipment((prev) => ({
+        ...prev!,
+        invoiceNumber: `${prefix}${invoiceNumber}`,
+      }))
+    } else if (editedShipment) {
+      setEditedShipment((prev) => ({
+        ...prev!,
+        invoiceNumber: "",
+      }))
+    }
+  }, [invoiceType, invoiceNumber, editedShipment])
+
+  if (!shipment) return null
+
+  const handleEdit = () => {
+    setIsEditing(true)
+    setError(null)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditing(false)
+    setEditedShipment({ ...shipment })
+    setError(null)
+  }
+
+  const handleSave = async () => {
+    if (!editedShipment) return
+
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
+      const updateData = {
+        ...editedShipment,
+        updatedAt: new Date().toISOString(),
+      }
+
+      await update(shipmentRef, updateData)
+
+      if (onUpdate) {
+        onUpdate(editedShipment)
+      }
+
+      toast({
+        title: "Envío actualizado",
+        description: "Los cambios se han guardado correctamente.",
+        duration: 3000,
       })
+
+      setIsEditing(false)
+    } catch (error) {
+      console.error("Error updating shipment:", error)
+      setError("Error al actualizar el envío. Por favor, intente de nuevo.")
+      toast({
+        title: "Error",
+        description: "No se pudo actualizar el envío.",
+        variant: "destructive",
+        duration: 5000,
+      })
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (!formData || !formData.client || !formData.transport) {
-      alert("Por favor complete los campos obligatorios")
+  const handleDelete = async () => {
+    if (!window.confirm("¿Está seguro de que desea eliminar este envío? Esta acción no se puede deshacer.")) {
       return
     }
 
-    onSave(formData)
-    setIsEditing(false)
-    onClose()
-  }
+    setIsDeleting(true)
+    setError(null)
 
-  const handleStatusChange = (status: "pending" | "sent" | "delivered") => {
-    if (formData) {
-      setFormData({ ...formData, status })
+    try {
+      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
+      await remove(shipmentRef)
+
+      if (onDelete) {
+        onDelete(shipment.id)
+      }
+
+      toast({
+        title: "Envío eliminado",
+        description: "El envío ha sido eliminado correctamente.",
+        duration: 3000,
+      })
+
+      onClose()
+    } catch (error) {
+      console.error("Error deleting shipment:", error)
+      setError("Error al eliminar el envío. Por favor, intente de nuevo.")
+      toast({
+        title: "Error",
+        description: "No se pudo eliminar el envío.",
+        variant: "destructive",
+        duration: 5000,
+      })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
-  const validateRemitNumber = (remitNumber: string) => {
-    // Validate remit number format: R - 0006-XXXXXXXX
-    const remitPattern = /^R - 0006-\d{8}$/
-    return remitPattern.test(remitNumber)
+  const handleSendEmail = async () => {
+    setIsSendingEmail(true)
+    setError(null)
+
+    try {
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(shipment),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Error al enviar el correo")
+      }
+
+      toast({
+        title: "Correo enviado",
+        description: "La notificación ha sido enviada al cliente.",
+        duration: 3000,
+      })
+    } catch (error) {
+      console.error("Error sending email:", error)
+      setError(`Error al enviar el correo: ${error.message}`)
+      toast({
+        title: "Error",
+        description: "No se pudo enviar el correo de notificación.",
+        variant: "destructive",
+        duration: 5000,
+      })
+    } finally {
+      setIsSendingEmail(false)
+    }
   }
 
-  const getTotalLabels = () => {
-    if (!formData) return 0
-
-    // Si hay bultos, usar la cantidad de bultos
-    if (formData.packages && formData.packages > 0) {
-      return formData.packages
-    }
-
-    // Si no hay bultos pero hay pallets, usar la cantidad de pallets
-    if (formData.pallets && formData.pallets > 0) {
-      return formData.pallets
-    }
-
-    // Si no hay ni bultos ni pallets, generar al menos 1 etiqueta
-    return 1
+  const handlePrintLabels = () => {
+    router.push(`/print-labels/${shipment.id}`)
   }
 
-  const getLabelType = (): "package" | "pallet" => {
-    if (!formData) return "package"
-
-    // Si hay bultos, las etiquetas son de bultos
-    if (formData.packages && formData.packages > 0) {
-      return "package"
+  const formatDate = (dateString: string) => {
+    try {
+      const date = new Date(dateString)
+      return format(date, "dd 'de' MMMM 'de' yyyy", { locale: es })
+    } catch (error) {
+      return "Fecha inválida"
     }
-
-    // Si no hay bultos pero hay pallets, las etiquetas son de pallets
-    return "pallet"
   }
 
-  if (!formData) return null
+  const getTotalLabels = (): number => {
+    if (editedShipment?.packages && editedShipment.packages > 0) {
+      return editedShipment.packages
+    } else if (editedShipment?.pallets && editedShipment.pallets > 0) {
+      return editedShipment.pallets
+    } else {
+      return 1
+    }
+  }
 
-  const totalLabels = getTotalLabels()
-  const labelType = getLabelType()
+  const currentShipment = editedShipment || shipment
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={!!shipment} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Package className="w-5 h-5" />
-              Detalle del Envío - {formData.shipmentNumber}
-            </div>
-            <div className="flex items-center gap-2">
-              {!isEditing && (
-                <>
-                  <Link href={`/print-labels/${formData.id}`} target="_blank">
-                    <Button size="sm" variant="outline">
-                      <Printer className="w-4 h-4 mr-2" />
-                      Imprimir ({totalLabels})
-                    </Button>
-                  </Link>
-                  <Link href={`/pedido/${formData.shipmentNumber}`} target="_blank">
-                    <Button size="sm" variant="outline">
-                      <Eye className="w-4 h-4 mr-2" />
-                      Ver Seguimiento
-                    </Button>
-                  </Link>
-                  <Button size="sm" onClick={() => setIsEditing(true)}>
-                    Editar
-                  </Button>
-                </>
-              )}
-            </div>
+            <span>Detalles del Envío</span>
+            <Badge variant={currentShipment.status === "sent" ? "default" : "secondary"}>
+              {currentShipment.status === "sent" ? "Enviado" : "Pendiente"}
+            </Badge>
           </DialogTitle>
+          <DialogDescription>
+            Envío #{currentShipment.shipmentNumber} - {formatDate(currentShipment.date)}
+          </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Status */}
-          <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
-            <Label>Estado:</Label>
-            <Select value={formData.status} onValueChange={handleStatusChange} disabled={!isEditing}>
-              <SelectTrigger className="w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Pendiente</SelectItem>
-                <SelectItem value="sent">Enviado</SelectItem>
-                <SelectItem value="delivered">Entregado</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="ml-auto text-sm text-gray-600">
-              Etiquetas: {totalLabels} {labelType === "pallet" ? "pallet(s)" : "bulto(s)"}
-            </div>
-          </div>
+        {error && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
+        <div className="grid gap-4 py-4">
           {/* Basic Information */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label htmlFor="shipmentNumber">Número de Envío *</Label>
-              <Input
-                id="shipmentNumber"
-                value={formData.shipmentNumber}
-                onChange={(e) => setFormData({ ...formData, shipmentNumber: e.target.value })}
-                disabled={!isEditing}
-                required
-              />
+              <Label htmlFor="shipmentNumber">Número de Envío</Label>
+              <Input id="shipmentNumber" value={currentShipment.shipmentNumber} readOnly />
             </div>
-
             <div>
-              <Label htmlFor="date">Fecha *</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !formData.date && "text-muted-foreground",
-                    )}
-                    disabled={!isEditing}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {formData.date ? format(new Date(formData.date), "PPP", { locale: es }) : "Seleccionar fecha"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={new Date(formData.date)}
-                    onSelect={(date) => date && setFormData({ ...formData, date: date.toISOString() })}
-                    initialFocus
-                    disabled={!isEditing}
-                  />
-                </PopoverContent>
-              </Popover>
+              <Label htmlFor="date">Fecha de Despacho</Label>
+              <Input
+                id="date"
+                type="date"
+                value={currentShipment.date?.split("T")[0] || ""}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    date: e.target.value,
+                  }))
+                }
+                readOnly={!isEditing}
+              />
             </div>
           </div>
 
           {/* Client Information */}
           <div className="space-y-4">
             <div>
-              <Label htmlFor="client">Cliente *</Label>
-              <Select value={formData.client} onValueChange={handleClientChange} disabled={!isEditing}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar cliente" />
-                </SelectTrigger>
-                <SelectContent>
-                  {clients.map((client) => (
-                    <SelectItem key={client.id} value={client.name}>
-                      {client.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="client">Cliente</Label>
+              <Input id="client" value={currentShipment.client} readOnly />
             </div>
-
             <div>
               <Label htmlFor="clientAddress">Dirección del Cliente</Label>
               <Textarea
                 id="clientAddress"
-                value={formData.clientAddress || ""}
-                onChange={(e) => setFormData({ ...formData, clientAddress: e.target.value })}
-                placeholder="Dirección de entrega"
+                value={currentShipment.clientAddress || ""}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    clientAddress: e.target.value,
+                  }))
+                }
+                readOnly={!isEditing}
                 rows={2}
-                disabled={!isEditing}
               />
             </div>
           </div>
 
           {/* Transport Information */}
           <div>
-            <Label htmlFor="transport">Transporte *</Label>
-            <Select
-              value={formData.transport}
-              onValueChange={(value) => setFormData({ ...formData, transport: value })}
-              disabled={!isEditing}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar transporte" />
-              </SelectTrigger>
-              <SelectContent>
-                {transports.map((transport) => (
-                  <SelectItem key={transport.id} value={transport.name}>
-                    {transport.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="transport">Transporte</Label>
+            <Input id="transport" value={currentShipment.transport} readOnly />
           </div>
 
           {/* Package Information */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <div>
               <Label htmlFor="packages">Bultos</Label>
               <Input
                 id="packages"
                 type="number"
                 min="0"
-                value={formData.packages || 0}
-                onChange={(e) => setFormData({ ...formData, packages: Number.parseInt(e.target.value) || 0 })}
-                disabled={!isEditing}
+                value={currentShipment.packages || 0}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    packages: Number.parseInt(e.target.value) || 0,
+                  }))
+                }
+                readOnly={!isEditing}
               />
             </div>
-
             <div>
               <Label htmlFor="pallets">Pallets</Label>
               <Input
                 id="pallets"
                 type="number"
                 min="0"
-                value={formData.pallets || 0}
-                onChange={(e) => setFormData({ ...formData, pallets: Number.parseInt(e.target.value) || 0 })}
-                disabled={!isEditing}
+                value={currentShipment.pallets || 0}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    pallets: Number.parseInt(e.target.value) || 0,
+                  }))
+                }
+                readOnly={!isEditing}
               />
             </div>
-
             <div>
               <Label htmlFor="weight">Peso (kg)</Label>
               <Input
@@ -297,12 +401,17 @@ export default function ShipmentDetailModal({
                 type="number"
                 step="0.01"
                 min="0"
-                value={formData.weight || 0}
-                onChange={(e) => setFormData({ ...formData, weight: Number.parseFloat(e.target.value) || 0 })}
-                disabled={!isEditing}
+                value={currentShipment.weight || 0}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    weight: Number.parseFloat(e.target.value) || 0,
+                  }))
+                }
+                readOnly={!isEditing}
               />
             </div>
-
             <div>
               <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
               <Input
@@ -310,40 +419,125 @@ export default function ShipmentDetailModal({
                 type="number"
                 step="0.01"
                 min="0"
-                value={formData.declaredValue || 0}
-                onChange={(e) => setFormData({ ...formData, declaredValue: Number.parseFloat(e.target.value) || 0 })}
-                disabled={!isEditing}
+                value={currentShipment.declaredValue || 0}
+                onChange={(e) =>
+                  isEditing &&
+                  setEditedShipment((prev) => ({
+                    ...prev!,
+                    declaredValue: Number.parseFloat(e.target.value) || 0,
+                  }))
+                }
+                readOnly={!isEditing}
               />
             </div>
           </div>
 
           {/* Document Numbers */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="invoiceNumber">Número de Factura</Label>
-              <Input
-                id="invoiceNumber"
-                value={formData.invoiceNumber || ""}
-                onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })}
-                placeholder="F-001-00000123"
-                disabled={!isEditing}
-              />
+          {isEditing ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="invoiceNumber">Número de Factura</Label>
+                <div className="flex gap-2">
+                  <Select value={invoiceType} onValueChange={(value) => setInvoiceType(value as "A" | "B" | "E")}>
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="A">A</SelectItem>
+                      <SelectItem value="B">B</SelectItem>
+                      <SelectItem value="E">E</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    id="invoiceNumber"
+                    placeholder="Número"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    className="flex-1"
+                  />
+                </div>
+                {currentShipment.invoiceNumber && (
+                  <p className="text-sm text-muted-foreground">Formato guardado: {currentShipment.invoiceNumber}</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="remitNumber">Número de Remito</Label>
+                <div className="flex gap-2">
+                  <Select value={remitType} onValueChange={(value) => setRemitType(value as "R" | "X" | "RM")}>
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="R">R</SelectItem>
+                      <SelectItem value="X">X</SelectItem>
+                      <SelectItem value="RM">RM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    id="remitNumber"
+                    placeholder="Número"
+                    value={remitNumber}
+                    onChange={(e) => setRemitNumber(e.target.value)}
+                    className="flex-1"
+                  />
+                </div>
+                {currentShipment.remitNumber && (
+                  <p className="text-sm text-muted-foreground">Formato guardado: {currentShipment.remitNumber}</p>
+                )}
+              </div>
             </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="invoiceNumber">Número de Factura</Label>
+                <Input id="invoiceNumber" value={currentShipment.invoiceNumber || ""} readOnly />
+              </div>
+              <div>
+                <Label htmlFor="remitNumber">Número de Remito</Label>
+                <Input id="remitNumber" value={currentShipment.remitNumber || ""} readOnly />
+              </div>
+            </div>
+          )}
 
-            <div>
-              <Label htmlFor="remitNumber">Número de Remito</Label>
-              <Input
-                id="remitNumber"
-                value={formData.remitNumber || ""}
-                onChange={(e) => setFormData({ ...formData, remitNumber: e.target.value })}
-                placeholder="R - 0006-00000001"
-                disabled={!isEditing}
-                className={formData.remitNumber && !validateRemitNumber(formData.remitNumber) ? "border-red-500" : ""}
-              />
-              {formData.remitNumber && !validateRemitNumber(formData.remitNumber) && (
-                <p className="text-sm text-red-500 mt-1">Formato inválido. Use: R - 0006-XXXXXXXX</p>
-              )}
-            </div>
+          {/* Status */}
+          <div>
+            <Label htmlFor="status">Estado</Label>
+            <Select
+              value={currentShipment.status}
+              onValueChange={(value) =>
+                isEditing &&
+                setEditedShipment((prev) => ({
+                  ...prev!,
+                  status: value as "pending" | "sent",
+                }))
+              }
+              disabled={!isEditing}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pending">Pendiente</SelectItem>
+                <SelectItem value="sent">Enviado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Delivery Note */}
+          <div>
+            <Label htmlFor="deliveryNote">Nota de Entrega</Label>
+            <Input
+              id="deliveryNote"
+              value={currentShipment.deliveryNote || ""}
+              onChange={(e) =>
+                isEditing &&
+                setEditedShipment((prev) => ({
+                  ...prev!,
+                  deliveryNote: e.target.value,
+                }))
+              }
+              readOnly={!isEditing}
+            />
           </div>
 
           {/* Special Handling */}
@@ -353,8 +547,14 @@ export default function ShipmentDetailModal({
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="isFragile"
-                  checked={formData.isFragile || false}
-                  onCheckedChange={(checked) => setFormData({ ...formData, isFragile: !!checked })}
+                  checked={currentShipment.isFragile || false}
+                  onCheckedChange={(checked) =>
+                    isEditing &&
+                    setEditedShipment((prev) => ({
+                      ...prev!,
+                      isFragile: !!checked,
+                    }))
+                  }
                   disabled={!isEditing}
                 />
                 <Label htmlFor="isFragile">Frágil</Label>
@@ -363,8 +563,14 @@ export default function ShipmentDetailModal({
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="isUrgent"
-                  checked={formData.isUrgent || false}
-                  onCheckedChange={(checked) => setFormData({ ...formData, isUrgent: !!checked })}
+                  checked={currentShipment.isUrgent || false}
+                  onCheckedChange={(checked) =>
+                    isEditing &&
+                    setEditedShipment((prev) => ({
+                      ...prev!,
+                      isUrgent: !!checked,
+                    }))
+                  }
                   disabled={!isEditing}
                 />
                 <Label htmlFor="isUrgent">Urgente</Label>
@@ -373,8 +579,14 @@ export default function ShipmentDetailModal({
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="hasColdChain"
-                  checked={formData.hasColdChain || false}
-                  onCheckedChange={(checked) => setFormData({ ...formData, hasColdChain: !!checked })}
+                  checked={currentShipment.hasColdChain || false}
+                  onCheckedChange={(checked) =>
+                    isEditing &&
+                    setEditedShipment((prev) => ({
+                      ...prev!,
+                      hasColdChain: !!checked,
+                    }))
+                  }
                   disabled={!isEditing}
                 />
                 <Label htmlFor="hasColdChain">Cadena de Frío</Label>
@@ -383,51 +595,118 @@ export default function ShipmentDetailModal({
           </div>
 
           {/* Notes */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="notes">Observaciones</Label>
-              <Textarea
-                id="notes"
-                value={formData.notes || ""}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="Observaciones adicionales"
-                rows={3}
-                disabled={!isEditing}
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="deliveryNote">Nota de Entrega</Label>
-              <Textarea
-                id="deliveryNote"
-                value={formData.deliveryNote || ""}
-                onChange={(e) => setFormData({ ...formData, deliveryNote: e.target.value })}
-                placeholder="Instrucciones especiales de entrega"
-                rows={3}
-                disabled={!isEditing}
-              />
-            </div>
+          <div>
+            <Label htmlFor="notes">Observaciones</Label>
+            <Textarea
+              id="notes"
+              value={currentShipment.notes || ""}
+              onChange={(e) =>
+                isEditing &&
+                setEditedShipment((prev) => ({
+                  ...prev!,
+                  notes: e.target.value,
+                }))
+              }
+              readOnly={!isEditing}
+              rows={3}
+            />
           </div>
 
-          {/* Actions */}
-          <div className="flex justify-end space-x-2 pt-4 border-t">
+          {/* Attachments */}
+          {currentShipment.attachments && currentShipment.attachments.length > 0 && (
+            <div>
+              <Label>Archivos Adjuntos</Label>
+              <div className="space-y-2 mt-2">
+                {currentShipment.attachments.map((attachment, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 border rounded">
+                    <span className="text-sm">{attachment.split("/").pop()}</span>
+                    <div className="flex space-x-2">
+                      <Button variant="outline" size="sm" onClick={() => window.open(attachment, "_blank")}>
+                        <ExternalLink className="h-4 w-4 mr-1" />
+                        Ver
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const link = document.createElement("a")
+                          link.href = attachment
+                          link.download = attachment.split("/").pop() || "archivo"
+                          link.click()
+                        }}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Descargar
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="flex justify-between">
+          <div className="flex space-x-2">
+            {showPrintButton && (
+              <Button variant="outline" onClick={handlePrintLabels}>
+                <Printer className="mr-2 h-4 w-4" />
+                Imprimir Etiquetas ({getTotalLabels()})
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={handleSendEmail}
+              disabled={isSendingEmail || !currentShipment.clientEmail}
+            >
+              {isSendingEmail ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Enviando...
+                </>
+              ) : (
+                <>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Enviar Email
+                </>
+              )}
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+              {isDeleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Eliminando...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Eliminar
+                </>
+              )}
+            </Button>
+          </div>
+          <div className="flex space-x-2">
             {isEditing ? (
               <>
-                <Button type="button" variant="outline" onClick={() => setIsEditing(false)}>
+                <Button variant="outline" onClick={handleCancelEdit}>
                   Cancelar
                 </Button>
-                <Button type="submit">
-                  <Save className="w-4 h-4 mr-2" />
-                  Guardar Cambios
+                <Button onClick={handleSave} disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    "Guardar Cambios"
+                  )}
                 </Button>
               </>
             ) : (
-              <Button type="button" onClick={onClose}>
-                Cerrar
-              </Button>
+              <Button onClick={handleEdit}>Editar</Button>
             )}
           </div>
-        </form>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

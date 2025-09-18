@@ -1,164 +1,151 @@
 "use client"
-
 import { useEffect, useState } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import ShipmentLabel from "@/components/shipment-label"
+import { ArrowLeft, Printer } from "lucide-react"
+import { ref, get } from "firebase/database"
+import { rtdb } from "@/lib/firebase"
 import type { Shipment } from "@/lib/types"
-import { Printer, ArrowLeft } from "lucide-react"
-import Link from "next/link"
+import ShipmentLabel from "@/components/shipment-label"
 
 export default function PrintLabelsPage() {
   const params = useParams()
+  const router = useRouter()
   const [shipment, setShipment] = useState<Shipment | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchShipment = async () => {
-      try {
-        // In a real app, this would fetch from your database
-        // For now, we'll get it from localStorage or use mock data
-        const shipments = JSON.parse(localStorage.getItem("shipments") || "[]")
-        const foundShipment = shipments.find((s: Shipment) => s.id === params.id)
+      if (!params.id) return
 
-        if (foundShipment) {
-          setShipment(foundShipment)
-        } else {
-          // Mock shipment for demo
-          setShipment({
+      try {
+        const shipmentRef = ref(rtdb, `shipments/${params.id}`)
+        const snapshot = await get(shipmentRef)
+
+        if (snapshot.exists()) {
+          const shipmentData = {
             id: params.id as string,
-            shipmentNumber: "GEM-2024-001",
-            client: "Cliente Demo",
-            clientAddress: "Av. Corrientes 1234, CABA",
-            transport: "Transporte Demo",
-            date: new Date().toISOString(),
-            packages: 3,
-            pallets: 0,
-            weight: 15.5,
-            declaredValue: 1500,
-            status: "pending",
-            invoiceNumber: "F-001-00000123",
-            remitNumber: "R-0006-00000001",
-            notes: "Manejar con cuidado",
-            isFragile: true,
-            isUrgent: false,
-            hasColdChain: false,
-          })
+            ...snapshot.val(),
+          }
+          setShipment(shipmentData)
+        } else {
+          setError("Envío no encontrado")
         }
       } catch (error) {
         console.error("Error fetching shipment:", error)
+        setError("Error al cargar el envío")
       } finally {
-        setLoading(false)
+        setIsLoading(false)
       }
     }
 
     fetchShipment()
   }, [params.id])
 
-  const getTotalLabels = () => {
-    if (!shipment) return 0
-
-    // Si hay bultos, usar la cantidad de bultos
-    if (shipment.packages && shipment.packages > 0) {
-      return shipment.packages
-    }
-
-    // Si no hay bultos pero hay pallets, usar la cantidad de pallets
-    if (shipment.pallets && shipment.pallets > 0) {
-      return shipment.pallets
-    }
-
-    // Si no hay ni bultos ni pallets, generar al menos 1 etiqueta
-    return 1
-  }
-
-  const getLabelType = (): "package" | "pallet" => {
-    if (!shipment) return "package"
-
-    // Si hay bultos, las etiquetas son de bultos
-    if (shipment.packages && shipment.packages > 0) {
-      return "package"
-    }
-
-    // Si no hay bultos pero hay pallets, las etiquetas son de pallets
-    return "pallet"
-  }
-
   const handlePrint = () => {
     window.print()
   }
 
-  if (loading) {
+  // Función para determinar el total de etiquetas
+  const getTotalLabels = (shipment: Shipment): number => {
+    // Si hay bultos, usar la cantidad de bultos
+    if (shipment.packages && shipment.packages > 0) {
+      return shipment.packages
+    }
+    // Si no hay bultos pero hay pallets, usar la cantidad de pallets
+    else if (shipment.pallets && shipment.pallets > 0) {
+      return shipment.pallets
+    }
+    // Si no hay ni bultos ni pallets, generar al menos 1 etiqueta
+    else {
+      return 1
+    }
+  }
+
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Cargando etiquetas...</p>
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900 mx-auto"></div>
+          <p className="mt-4 text-lg">Cargando envío...</p>
         </div>
       </div>
     )
   }
 
-  if (!shipment) {
+  if (error || !shipment) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">Envío no encontrado</h1>
-          <Link href="/dashboard">
-            <Button>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Volver al Dashboard
-            </Button>
-          </Link>
+          <p className="text-red-600 text-lg mb-4">{error || "Envío no encontrado"}</p>
+          <Button onClick={() => router.back()}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Volver
+          </Button>
         </div>
       </div>
     )
   }
 
-  const totalLabels = getTotalLabels()
-  const labelType = getLabelType()
+  const totalLabels = getTotalLabels(shipment)
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Print Controls - Hidden when printing */}
+    <div className="min-h-screen bg-gray-100">
+      {/* Header - Hidden when printing */}
       <div className="print:hidden bg-white shadow-sm border-b p-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <Link href="/dashboard">
-              <Button variant="outline">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Volver
-              </Button>
-            </Link>
+            <Button variant="outline" onClick={() => router.back()}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Volver
+            </Button>
             <div>
               <h1 className="text-xl font-semibold">Etiquetas de Envío</h1>
               <p className="text-sm text-gray-600">
-                {shipment.shipmentNumber} - {totalLabels} {labelType === "pallet" ? "pallet(s)" : "etiqueta(s)"}
+                Envío: {shipment.shipmentNumber} - {totalLabels} etiqueta(s)
               </p>
             </div>
           </div>
           <Button onClick={handlePrint} className="bg-blue-600 hover:bg-blue-700">
-            <Printer className="w-4 h-4 mr-2" />
+            <Printer className="mr-2 h-4 w-4" />
             Imprimir Etiquetas
           </Button>
         </div>
       </div>
 
       {/* Labels Container */}
-      <div className="p-4 print:p-0">
-        <div className="space-y-8 print:space-y-4">
+      <div className="print:p-0 p-8">
+        <div className="max-w-4xl mx-auto space-y-8 print:space-y-0">
           {Array.from({ length: totalLabels }, (_, index) => (
-            <div key={index} className="print:break-after-page last:print:break-after-auto">
-              <ShipmentLabel
-                shipment={shipment}
-                labelNumber={index + 1}
-                totalLabels={totalLabels}
-                labelType={labelType}
-              />
+            <div key={index} className="print:break-after-page">
+              <ShipmentLabel shipment={shipment} labelNumber={index + 1} totalLabels={totalLabels} />
             </div>
           ))}
         </div>
       </div>
+
+      {/* Print Styles */}
+      <style jsx global>{`
+        @media print {
+          body {
+            margin: 0;
+            padding: 0;
+          }
+          .print\\:break-after-page {
+            break-after: page;
+          }
+          .print\\:hidden {
+            display: none !important;
+          }
+          .print\\:p-0 {
+            padding: 0 !important;
+          }
+          .print\\:space-y-0 > * + * {
+            margin-top: 0 !important;
+          }
+        }
+      `}</style>
     </div>
   )
 }
