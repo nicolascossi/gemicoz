@@ -266,7 +266,15 @@ export default function ShipmentDetailModal({ shipment, onClose, showPrintButton
       // Also set the clientCode
       setEditedShipment((prev) => ({
         ...prev,
-        clientCode: client.clientCode,
+        client: selectedClient.businessName,
+        clientEmail: selectedClient.email,
+        clientPhone: selectedClient.phone,
+        clientAddress: `${selectedAddress.street}${selectedAddress.city ? `, ${selectedAddress.city}` : ""}${
+          selectedAddress.title ? ` [${selectedAddress.title}]` : ""
+        }`,
+        clientAddressId: selectedAddress.id,
+        clientAddressTitle: selectedAddress.title || "", // Asegurar que el título se guarde explícitamente
+        clientCode: selectedClient.clientCode,
       }))
     }
   }
@@ -601,7 +609,7 @@ export default function ShipmentDetailModal({ shipment, onClose, showPrintButton
                 <Input
                   id="packages"
                   type="number"
-                  min="1"
+                  min="0"
                   value={editedShipment.packages}
                   onChange={(e) => handleChange("packages", Number.parseInt(e.target.value))}
                 />

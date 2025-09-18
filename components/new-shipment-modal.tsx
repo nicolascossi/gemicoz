@@ -47,7 +47,7 @@ export default function NewShipmentModal({
   const [shipment, setShipment] = useState<Partial<Shipment>>({
     status: "pending",
     date: new Date().toISOString().split("T")[0],
-    packages: 1,
+    packages: 0,
     pallets: 0, // Inicializar pallets en 0
     invoiceNumber: "",
     remitNumber: "",
@@ -613,7 +613,7 @@ export default function NewShipmentModal({
               <Input
                 id="packages"
                 type="number"
-                min="1"
+                min="0"
                 value={shipment.packages}
                 onChange={(e) => setShipment({ ...shipment, packages: Number.parseInt(e.target.value) })}
                 className="col-span-3"
