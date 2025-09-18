@@ -1,655 +1,941 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import type React from "react"
+
+import { useState, useEffect, useCallback } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Save, Loader2, Package, FileText, Calendar, Hash, Edit, Trash2, Printer, Eye, EyeOff } from "lucide-react"
-import { ref, update, remove, get } from "firebase/database"
-import { rtdb } from "@/lib/firebase"
-import type { Shipment, Client, Transport } from "@/lib/types"
-import { toast } from "@/components/ui/use-toast"
+import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
 import { format } from "date-fns"
-import { es } from "date-fns/locale"
-import { useRouter } from "next/navigation"
+import { Printer, Edit, Save, X } from "lucide-react"
+import type { Shipment, Client, ClientAddress } from "@/lib/types"
+import { getClients, getTransports } from "@/lib/data-utils"
+import { ref, update } from "firebase/database"
+import { rtdb } from "@/lib/firebase"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import Image from "next/image"
 
 interface ShipmentDetailModalProps {
   shipment: Shipment
   onClose: () => void
-  onShipmentUpdated?: (shipment: Shipment) => void
-  onShipmentDeleted?: (shipmentId: string) => void
   showPrintButton?: boolean
 }
 
-export default function ShipmentDetailModal({
-  shipment,
-  onClose,
-  onShipmentUpdated,
-  onShipmentDeleted,
-  showPrintButton = true,
-}: ShipmentDetailModalProps) {
-  const router = useRouter()
+export default function ShipmentDetailModal({ shipment, onClose, showPrintButton = true }: ShipmentDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
+  const [editedShipment, setEditedShipment] = useState<Shipment>({ ...shipment })
+  const [remitType, setRemitType] = useState<"R" | "X" | "RM">("R")
+  const [remitNumber, setRemitNumber] = useState("")
+  const [invoiceType, setInvoiceType] = useState<"A" | "B" | "E">("A")
+  const [invoiceNumber, setInvoiceNumber] = useState("")
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [clients, setClients] = useState<Client[]>([])
-  const [transports, setTransports] = useState<Transport[]>([])
-  const [showSensitiveInfo, setShowSensitiveInfo] = useState(false)
+  const [transports, setTransports] = useState<any[]>([])
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+  const [selectedAddress, setSelectedAddress] = useState<ClientAddress | null>(null)
 
-  // Form state
-  const [formData, setFormData] = useState({
-    date: shipment.date,
-    client: shipment.client,
-    clientAddress: shipment.clientAddress || "",
-    transport: shipment.transport,
-    packages: shipment.packages?.toString() || "",
-    pallets: shipment.pallets?.toString() || "",
-    weight: shipment.weight?.toString() || "",
-    declaredValue: shipment.declaredValue?.toString() || "",
-    shippingCost: shipment.shippingCost?.toString() || "",
-    invoiceNumber: shipment.invoiceNumber || "",
-    remitNumber: shipment.remitNumber || "",
-    deliveryNote: shipment.deliveryNote || "",
-    orderNote: shipment.orderNote || "",
-    notes: shipment.notes || "",
-    status: shipment.status,
-  })
+  // Función mejorada para manejar navegación con teclado en selects
+  const handleSelectKeyDown = (
+    e: React.KeyboardEvent,
+    options: any[],
+    currentValue: any,
+    onChange: (value: any) => void,
+  ) => {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault()
+      e.stopPropagation()
 
-  // Load clients and transports when editing
-  useEffect(() => {
-    if (isEditing) {
-      loadClients()
-      loadTransports()
-    }
-  }, [isEditing])
+      const currentIndex = options.findIndex(
+        (option) =>
+          option.value === currentValue ||
+          option.id === currentValue ||
+          option.name === currentValue ||
+          option === currentValue,
+      )
 
-  const loadClients = async () => {
-    try {
-      const clientsRef = ref(rtdb, "clients")
-      const snapshot = await get(clientsRef)
-      if (snapshot.exists()) {
-        const clientsData = snapshot.val()
-        const clientsArray = Object.keys(clientsData).map((key) => ({
-          id: key,
-          ...clientsData[key],
-        }))
-        setClients(clientsArray)
+      let newIndex
+      if (e.key === "ArrowUp") {
+        newIndex = currentIndex > 0 ? currentIndex - 1 : options.length - 1
+      } else {
+        newIndex = currentIndex < options.length - 1 ? currentIndex + 1 : 0
       }
-    } catch (error) {
-      console.error("Error loading clients:", error)
+
+      const newValue = options[newIndex]
+      if (newValue) {
+        if (newValue.value) onChange(newValue.value)
+        else if (newValue.id) onChange(newValue.id)
+        else if (newValue.name) onChange(newValue.name)
+        else onChange(newValue)
+      }
     }
   }
 
-  const loadTransports = async () => {
-    try {
-      const transportsRef = ref(rtdb, "transports")
-      const snapshot = await get(transportsRef)
-      if (snapshot.exists()) {
-        const transportsData = snapshot.val()
-        const transportsArray = Object.keys(transportsData).map((key) => ({
-          id: key,
-          ...transportsData[key],
-        }))
-        setTransports(transportsArray)
+  useEffect(() => {
+    // Parse existing remitNumber if it exists
+    if (shipment.remitNumber) {
+      // Check for R format: "R - 00006 - NUMBER"
+      const rPattern = /^R - 00006 - (.+)$/
+      const rMatch = shipment.remitNumber.match(rPattern)
+
+      // Check for X format: "X - R00001 - NUMBER"
+      const xPattern = /^X - R00001 - (.+)$/
+      const xMatch = shipment.remitNumber.match(xPattern)
+
+      // Check for RM format: "RM - NUMBER"
+      const rmPattern = /^RM - (.+)$/
+      const rmMatch = shipment.remitNumber.match(rmPattern)
+
+      if (rMatch && rMatch[1]) {
+        setRemitType("R")
+        setRemitNumber(rMatch[1])
+      } else if (xMatch && xMatch[1]) {
+        setRemitType("X")
+        setRemitNumber(xMatch[1])
+      } else if (rmMatch && rmMatch[1]) {
+        setRemitType("RM")
+        setRemitNumber(rmMatch[1])
+      } else {
+        // If format doesn't match, just use the whole string as the number
+        setRemitType("R")
+        setRemitNumber(shipment.remitNumber)
       }
-    } catch (error) {
-      console.error("Error loading transports:", error)
+    } else {
+      setRemitType("R")
+      setRemitNumber("")
     }
+
+    // Parse existing invoiceNumber if it exists
+    if (shipment.invoiceNumber) {
+      // Check for A format: "A 00001-NUMBER"
+      const aPattern = /^A 00001-(.+)$/
+      const aMatch = shipment.invoiceNumber.match(aPattern)
+
+      // Check for B format: "B 00001-(.+)$/
+      const bPattern = /^B 00001-(.+)$/
+      const bMatch = shipment.invoiceNumber.match(bPattern)
+
+      // Check for E format: "E 00004-NUMBER"
+      const ePattern = /^E 00004-(.+)$/
+      const eMatch = shipment.invoiceNumber.match(ePattern)
+
+      if (aMatch && aMatch[1]) {
+        setInvoiceType("A")
+        setInvoiceNumber(aMatch[1])
+      } else if (bMatch && bMatch[1]) {
+        setInvoiceType("B")
+        setInvoiceNumber(bMatch[1])
+      } else if (eMatch && eMatch[1]) {
+        setInvoiceType("E")
+        setInvoiceNumber(eMatch[1])
+      } else {
+        // If format doesn't match, just use the whole string as the number
+        setInvoiceType("A")
+        setInvoiceNumber(shipment.invoiceNumber)
+      }
+    } else {
+      setInvoiceType("A")
+      setInvoiceNumber("")
+    }
+  }, [shipment.remitNumber, shipment.invoiceNumber])
+
+  // Update editedShipment.remitNumber when remitType or remitNumber changes
+  useEffect(() => {
+    if (isEditing) {
+      if (remitNumber) {
+        if (remitType === "R") {
+          setEditedShipment((prev) => ({
+            ...prev,
+            remitNumber: `${remitType} - 00006 - ${remitNumber}`,
+          }))
+        } else if (remitType === "X") {
+          setEditedShipment((prev) => ({
+            ...prev,
+            remitNumber: `${remitType} - R00001 - ${remitNumber}`,
+          }))
+        } else if (remitType === "RM") {
+          setEditedShipment((prev) => ({
+            ...prev,
+            remitNumber: `${remitType} - ${remitNumber}`,
+          }))
+        }
+      } else {
+        setEditedShipment((prev) => ({
+          ...prev,
+          remitNumber: "",
+        }))
+      }
+    }
+  }, [remitType, remitNumber, isEditing])
+
+  // Update editedShipment.invoiceNumber when invoiceType or invoiceNumber changes
+  useEffect(() => {
+    if (isEditing) {
+      if (invoiceNumber) {
+        let prefix = ""
+        if (invoiceType === "A") {
+          prefix = "A 00001-"
+        } else if (invoiceType === "B") {
+          prefix = "B 00001-"
+        } else if (invoiceType === "E") {
+          prefix = "E 00004-"
+        }
+
+        setEditedShipment((prev) => ({
+          ...prev,
+          invoiceNumber: `${prefix}${invoiceNumber}`,
+        }))
+      } else {
+        setEditedShipment((prev) => ({
+          ...prev,
+          invoiceNumber: "",
+        }))
+      }
+    }
+  }, [invoiceType, invoiceNumber, isEditing])
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const clientsData = await getClients()
+        const transportsData = await getTransports()
+        setClients(clientsData)
+        setTransports(transportsData)
+
+        // Find the client based on the shipment's client name
+        const client = clientsData.find((c) => c.businessName === shipment.client)
+        if (client) {
+          setSelectedClient(client)
+
+          // Try to find the selected address by ID or by matching street
+          let address = null
+          if (shipment.clientAddressId) {
+            address = client.addresses.find((a) => a.id === shipment.clientAddressId)
+          }
+
+          // If no address found by ID, try to match by street name
+          if (!address && shipment.clientAddress) {
+            const streetPart = shipment.clientAddress.split(",")[0].trim()
+            address = client.addresses.find((a) => a.street.includes(streetPart) || streetPart.includes(a.street))
+          }
+
+          // If still no match, use the default address
+          if (!address && client.addresses.length > 0) {
+            address = client.addresses.find((a) => a.isDefault) || client.addresses[0]
+          }
+
+          if (address) {
+            setSelectedAddress(address)
+          }
+        }
+      } catch (error) {
+        console.error("Error loading clients and transports:", error)
+        setError("Error al cargar los datos de clientes y transportes")
+      }
+    }
+    loadData()
+  }, [shipment])
+
+  const handleEdit = () => {
+    setIsEditing(true)
   }
 
   const handleClientChange = (clientId: string) => {
-    const selectedClient = clients.find((c) => c.id === clientId)
-    if (selectedClient) {
-      setFormData((prev) => ({
-        ...prev,
-        client: selectedClient.businessName,
-        clientAddress: selectedClient.address || "",
-      }))
-    }
-  }
+    const client = clients.find((c) => c.id === clientId)
+    if (client) {
+      setSelectedClient(client)
+      setSelectedAddress(null)
 
-  const handleTransportChange = (transportId: string) => {
-    const selectedTransport = transports.find((t) => t.id === transportId)
-    if (selectedTransport) {
-      setFormData((prev) => ({
+      // If there's only one address, select it automatically
+      if (client.addresses.length === 1) {
+        setSelectedAddress(client.addresses[0])
+      }
+      // Otherwise, try to select the default address
+      else {
+        const defaultAddress = client.addresses.find((addr) => addr.isDefault)
+        if (defaultAddress) {
+          setSelectedAddress(defaultAddress)
+        }
+      }
+
+      // Also set the clientCode
+      setEditedShipment((prev) => ({
         ...prev,
-        transport: selectedTransport.name,
+        clientCode: client.clientCode,
       }))
     }
   }
 
   const handleSave = async () => {
-    setIsLoading(true)
-
+    setIsSaving(true)
+    setError(null)
+    setSuccessMessage(null)
     try {
-      const updatedData = {
-        ...shipment,
-        date: formData.date,
-        client: formData.client,
-        clientAddress: formData.clientAddress,
-        transport: formData.transport,
-        packages: Number.parseInt(formData.packages) || 0,
-        pallets: Number.parseInt(formData.pallets) || 0,
-        weight: Number.parseFloat(formData.weight) || 0,
-        declaredValue: Number.parseFloat(formData.declaredValue) || 0,
-        shippingCost: Number.parseFloat(formData.shippingCost) || 0,
-        invoiceNumber: formData.invoiceNumber,
-        remitNumber: formData.remitNumber,
-        deliveryNote: formData.deliveryNote,
-        orderNote: formData.orderNote,
-        notes: formData.notes,
-        status: formData.status,
-        updatedAt: new Date().toISOString(),
+      // Update client info if selection has changed
+      // Modificar cómo se actualiza el envío para incluir correctamente el título
+      if (selectedClient && selectedAddress) {
+        setEditedShipment((prev) => ({
+          ...prev,
+          client: selectedClient.businessName,
+          clientEmail: selectedClient.email,
+          clientPhone: selectedClient.phone,
+          clientAddress: `${selectedAddress.street}${selectedAddress.city ? `, ${selectedAddress.city}` : ""}${
+            selectedAddress.title ? ` [${selectedAddress.title}]` : ""
+          }`,
+          clientAddressId: selectedAddress.id,
+          clientAddressTitle: selectedAddress.title || "", // Asegurar que el título se guarde explícitamente
+          clientCode: selectedClient.clientCode,
+        }))
       }
 
+      // Update the state in the database
       const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
-      await update(shipmentRef, updatedData)
+      await update(shipmentRef, editedShipment)
 
-      if (onShipmentUpdated) {
-        onShipmentUpdated(updatedData)
+      console.log("Shipment updated successfully")
+      setSuccessMessage("Pedido actualizado correctamente.")
+
+      // If the state changed to "sent", try to send the email
+      if (editedShipment.status === "sent" && shipment.status !== "sent") {
+        // Check if client has an email
+        if (!editedShipment.clientEmail) {
+          console.log("Client has no email, skipping email notification")
+          setSuccessMessage(
+            "Pedido actualizado correctamente. No se envió notificación porque el cliente no tiene email registrado.",
+          )
+        } else {
+          try {
+            const response = await fetch("/api/send-email", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(editedShipment),
+            })
+
+            const data = await response.json()
+
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to send email")
+            }
+
+            console.log("Email sent successfully:", data)
+            setSuccessMessage(
+              (prev) =>
+                `${prev} Correo de notificación enviado con ${editedShipment.attachments?.length || 0} archivo(s) adjunto(s).`,
+            )
+          } catch (emailError) {
+            console.error("Error sending email:", emailError)
+            setError(
+              `El pedido se actualizó, pero hubo un error al enviar el correo de notificación: ${emailError.message}`,
+            )
+          }
+        }
       }
 
       setIsEditing(false)
-      toast({
-        title: "Envío actualizado",
-        description: `El envío ${shipment.shipmentNumber} ha sido actualizado exitosamente.`,
-      })
     } catch (error) {
       console.error("Error updating shipment:", error)
-      toast({
-        title: "Error",
-        description: "No se pudo actualizar el envío. Por favor, intente de nuevo.",
-        variant: "destructive",
-      })
+      setError(`Error al actualizar el envío: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
-      setIsLoading(false)
+      setIsSaving(false)
     }
   }
 
-  const handleDelete = async () => {
-    if (!confirm("¿Está seguro de que desea eliminar este envío? Esta acción no se puede deshacer.")) {
-      return
+  const handleCancel = () => {
+    setEditedShipment({ ...shipment })
+    // Reset remit fields to original values
+    if (shipment.remitNumber) {
+      const parts = shipment.remitNumber.split(" - ")
+      if (parts.length === 2) {
+        setRemitType(parts[0] as "R" | "X")
+        setRemitNumber(parts[1])
+      } else {
+        setRemitType("R")
+        setRemitNumber(shipment.remitNumber)
+      }
+    } else {
+      setRemitType("R")
+      setRemitNumber("")
     }
+    setIsEditing(false)
+    setError(null)
+  }
 
-    setIsDeleting(true)
+  const handlePrintLabels = () => {
+    window.open(`/print-labels/${shipment.id}`, "_blank")
+  }
 
+  const adjustDate = useCallback((dateString) => {
     try {
-      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
-      await remove(shipmentRef)
+      // Handle empty or invalid dates
+      if (!dateString) return new Date().toISOString()
 
-      if (onShipmentDeleted) {
-        onShipmentDeleted(shipment.id)
+      // Parse the date string properly
+      const [year, month, day] = dateString.split("-").map(Number)
+
+      // Validate date components
+      if (isNaN(year) || isNaN(month) || isNaN(day) || year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) {
+        console.error("Invalid date components:", { year, month, day })
+        return new Date().toISOString()
       }
 
-      onClose()
-      toast({
-        title: "Envío eliminado",
-        description: `El envío ${shipment.shipmentNumber} ha sido eliminado exitosamente.`,
-      })
+      // Create the date at noon to avoid timezone issues
+      return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toISOString()
     } catch (error) {
-      console.error("Error deleting shipment:", error)
-      toast({
-        title: "Error",
-        description: "No se pudo eliminar el envío. Por favor, intente de nuevo.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsDeleting(false)
+      console.error("Error adjusting date:", error)
+      return new Date().toISOString()
+    }
+  }, [])
+
+  const handleChange = (field: keyof Shipment, value: any) => {
+    if (field === "date") {
+      try {
+        // Validate the date format before adjusting
+        if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          setEditedShipment((prev) => ({ ...prev, [field]: adjustDate(value) }))
+        } else {
+          console.warn("Invalid date format:", value)
+          // Keep the previous valid date
+        }
+      } catch (error) {
+        console.error("Error handling date change:", error)
+      }
+    } else {
+      setEditedShipment((prev) => ({ ...prev, [field]: value }))
     }
   }
 
-  const handlePrint = () => {
-    router.push(`/print-labels/${shipment.id}`)
+  const handleAddressChange = (addressId: string) => {
+    if (!selectedClient) return
+
+    const address = selectedClient.addresses.find((a) => a.id === addressId)
+    if (address) {
+      setSelectedAddress(address)
+    }
   }
 
-  const formatCurrency = (value: number | undefined) => {
-    if (!value) return "$0.00"
-    return `$${value.toFixed(2)}`
+  const handleTransportChange = (transportName: string) => {
+    const transport = transports.find((t) => t.name === transportName)
+    if (transport) {
+      setEditedShipment((prev) => ({
+        ...prev,
+        transport: transportName,
+        transportEmail: transport.email,
+        transportPhone: transport.phone,
+      }))
+    }
   }
 
-  const formatWeight = (value: number | undefined) => {
-    if (!value) return "0.00 kg"
-    return `${value.toFixed(2)} kg`
-  }
-
-  const getStatusBadge = (status: string) => {
-    return status === "sent" ? (
-      <Badge className="bg-green-500">Enviado</Badge>
-    ) : (
-      <Badge variant="secondary">Pendiente</Badge>
-    )
-  }
-
-  // Check if remit number follows the new pattern R - 0006 - XXXX
-  const isNewRemitFormat = (remitNumber: string) => {
-    return /^R - 0006 - \d{4}$/.test(remitNumber)
+  if (!shipment) {
+    return null
   }
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              Detalles del Envío
-              <Badge variant="outline">{shipment.shipmentNumber}</Badge>
-              {getStatusBadge(shipment.status)}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowSensitiveInfo(!showSensitiveInfo)}
-                title={showSensitiveInfo ? "Ocultar información sensible" : "Mostrar información sensible"}
-              >
-                {showSensitiveInfo ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-              {showPrintButton && (
-                <Button variant="outline" size="sm" onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-2" />
-                  Imprimir
-                </Button>
-              )}
-              {!isEditing && (
-                <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
-                  <Edit className="h-4 w-4 mr-2" />
-                  Editar
-                </Button>
-              )}
-            </div>
-          </DialogTitle>
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader className="flex flex-col items-center space-y-4">
+          <Image
+            src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
+            alt="Gemico Logo"
+            width={120}
+            height={60}
+            className="object-contain"
+            priority
+          />
+          <DialogTitle>Detalles del Envío {shipment.shipmentNumber}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Basic Information */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Calendar className="h-4 w-4" />
-                  Información Básica
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {isEditing ? (
-                  <>
-                    <div>
-                      <Label htmlFor="date">Fecha</Label>
-                      <Input
-                        id="date"
-                        type="date"
-                        value={formData.date}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, date: e.target.value }))}
-                      />
-                    </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-                    <div>
-                      <Label htmlFor="client">Cliente</Label>
-                      <Select
-                        value={clients.find((c) => c.businessName === formData.client)?.id || ""}
-                        onValueChange={handleClientChange}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar cliente" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {clients.map((client) => (
-                            <SelectItem key={client.id} value={client.id}>
-                              <div className="flex flex-col">
-                                <span>{client.businessName}</span>
-                                <span className="text-xs text-muted-foreground">{client.clientCode}</span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+        {successMessage && (
+          <Alert>
+            <AlertDescription>{successMessage}</AlertDescription>
+          </Alert>
+        )}
 
-                    <div>
-                      <Label htmlFor="clientAddress">Dirección del Cliente</Label>
-                      <Textarea
-                        id="clientAddress"
-                        value={formData.clientAddress}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, clientAddress: e.target.value }))}
-                        rows={2}
-                      />
-                    </div>
-
-                    <div>
-                      <Label htmlFor="transport">Transporte</Label>
-                      <Select
-                        value={transports.find((t) => t.name === formData.transport)?.id || ""}
-                        onValueChange={handleTransportChange}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar transporte" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {transports.map((transport) => (
-                            <SelectItem key={transport.id} value={transport.id}>
-                              {transport.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Fecha:</span>
-                      <span className="text-sm">{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Cliente:</span>
-                      <span className="text-sm">{shipment.client}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Dirección:</span>
-                      <span className="text-sm text-right max-w-[200px]">
-                        {shipment.clientAddress || "No especificada"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Transporte:</span>
-                      <span className="text-sm">{shipment.transport}</span>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Package Information */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Package className="h-4 w-4" />
-                  Información del Paquete
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {isEditing ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label htmlFor="packages">Bultos</Label>
-                        <Input
-                          id="packages"
-                          type="number"
-                          min="0"
-                          value={formData.packages}
-                          onChange={(e) => setFormData((prev) => ({ ...prev, packages: e.target.value }))}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="pallets">Pallets</Label>
-                        <Input
-                          id="pallets"
-                          type="number"
-                          min="0"
-                          value={formData.pallets}
-                          onChange={(e) => setFormData((prev) => ({ ...prev, pallets: e.target.value }))}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <Label htmlFor="weight">Peso (kg)</Label>
-                      <Input
-                        id="weight"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={formData.weight}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, weight: e.target.value }))}
-                      />
-                    </div>
-
-                    {showSensitiveInfo && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
-                          <Input
-                            id="declaredValue"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={formData.declaredValue}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, declaredValue: e.target.value }))}
-                          />
-                        </div>
-                        <div>
-                          <Label htmlFor="shippingCost">Costo de Envío ($)</Label>
-                          <Input
-                            id="shippingCost"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={formData.shippingCost}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, shippingCost: e.target.value }))}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Bultos:</span>
-                      <span className="text-sm">{shipment.packages || 0}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Pallets:</span>
-                      <span className="text-sm">{shipment.pallets || 0}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Peso:</span>
-                      <span className="text-sm">{formatWeight(shipment.weight)}</span>
-                    </div>
-                    {showSensitiveInfo && (
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-sm font-medium">Valor Declarado:</span>
-                          <span className="text-sm">{formatCurrency(shipment.declaredValue)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm font-medium">Costo de Envío:</span>
-                          <span className="text-sm">{formatCurrency(shipment.shippingCost)}</span>
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Document Information */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <FileText className="h-4 w-4" />
-                Información de Documentos
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
+        <div className="grid gap-4 py-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="client">Cliente</Label>
               {isEditing ? (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="invoiceNumber">Número de Factura</Label>
-                      <Input
-                        id="invoiceNumber"
-                        value={formData.invoiceNumber}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="remitNumber">Número de Remito</Label>
-                      <Input
-                        id="remitNumber"
-                        value={formData.remitNumber}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, remitNumber: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="deliveryNote">Nota de Entrega</Label>
-                      <Textarea
-                        id="deliveryNote"
-                        value={formData.deliveryNote}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, deliveryNote: e.target.value }))}
-                        rows={2}
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="orderNote">Nota de Pedido</Label>
-                      <Textarea
-                        id="orderNote"
-                        value={formData.orderNote}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, orderNote: e.target.value }))}
-                        rows={2}
-                      />
-                    </div>
-                  </div>
-                </>
+                <Select value={selectedClient?.id} onValueChange={handleClientChange} disabled={true}>
+                  <SelectTrigger
+                    onKeyDown={(e) => handleSelectKeyDown(e, clients, selectedClient?.id, handleClientChange)}
+                  >
+                    <SelectValue placeholder="Seleccionar cliente" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clients && clients.length > 0 ? (
+                      [...clients]
+                        .sort((a, b) => a.businessName.localeCompare(b.businessName))
+                        .map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.businessName} ({client.clientCode})
+                          </SelectItem>
+                        ))
+                    ) : (
+                      <SelectItem value="no-clients" disabled>
+                        No hay clientes disponibles
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Factura:</span>
-                      <span className="text-sm">{shipment.invoiceNumber || "No especificada"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium">Remito:</span>
-                      <span className="text-sm">{shipment.remitNumber || "No especificado"}</span>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div>
-                      <span className="text-sm font-medium">Nota de Entrega:</span>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {shipment.deliveryNote || "Sin nota de entrega"}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium">Nota de Pedido:</span>
-                      <p className="text-sm text-muted-foreground mt-1">{shipment.orderNote || "Sin nota de pedido"}</p>
-                    </div>
-                  </div>
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.client}</div>
+              )}
+            </div>
+
+            {isEditing && selectedClient && (
+              <div className="space-y-2">
+                <Label htmlFor="address">Dirección</Label>
+                <Select
+                  value={selectedAddress?.id}
+                  onValueChange={handleAddressChange}
+                  disabled={!selectedClient || selectedClient.addresses.length === 0}
+                >
+                  <SelectTrigger
+                    onKeyDown={(e) =>
+                      handleSelectKeyDown(e, selectedClient?.addresses || [], selectedAddress?.id, handleAddressChange)
+                    }
+                  >
+                    <SelectValue placeholder="Seleccionar dirección" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedClient && selectedClient.addresses.length > 0 ? (
+                      selectedClient.addresses.map((address) => (
+                        <SelectItem key={address.id} value={address.id}>
+                          {address.street}
+                          {address.city ? `, ${address.city}` : ""}
+                          {address.title ? ` [${address.title.toUpperCase()}]` : ""}
+                          {address.isDefault ? " [Predeterminada]" : ""}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="no-addresses" disabled>
+                        No hay direcciones registradas
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {!isEditing && (
+              <div className="space-y-2">
+                <Label htmlFor="clientAddress">Dirección</Label>
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.clientAddress}</div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="transport">Transporte</Label>
+              {isEditing ? (
+                <Select value={editedShipment.transport} onValueChange={handleTransportChange}>
+                  <SelectTrigger
+                    onKeyDown={(e) =>
+                      handleSelectKeyDown(e, transports, editedShipment.transport, handleTransportChange)
+                    }
+                  >
+                    <SelectValue placeholder="Seleccionar transporte" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {transports && transports.length > 0 ? (
+                      transports.map((transport) => (
+                        <SelectItem key={transport.id} value={transport.name || `transport-${transport.id}`}>
+                          {transport.name || "Transporte sin nombre"}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="no-transports">No hay transportes disponibles</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.transport}</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="shipmentNumber">Número de Envío</Label>
+              {isEditing ? (
+                <Input
+                  id="shipmentNumber"
+                  value={editedShipment.shipmentNumber}
+                  onChange={(e) => handleChange("shipmentNumber", e.target.value)}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.shipmentNumber}</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="date">Fecha de Despacho</Label>
+              {isEditing ? (
+                <Input
+                  id="date"
+                  type="date"
+                  value={editedShipment.date ? format(new Date(editedShipment.date), "yyyy-MM-dd") : ""}
+                  onChange={(e) => handleChange("date", e.target.value)}
+                  onInvalid={(e) => e.preventDefault()}
+                  min="2000-01-01"
+                  max="2100-12-31"
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{format(new Date(shipment.date), "dd/MM/yyyy")}</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="packages">Cantidad de Bultos</Label>
+              {isEditing ? (
+                <Input
+                  id="packages"
+                  type="number"
+                  min="1"
+                  value={editedShipment.packages}
+                  onChange={(e) => handleChange("packages", Number.parseInt(e.target.value))}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.packages}</div>
+              )}
+            </div>
+
+            {/* Nuevo campo para Pallets */}
+            <div className="space-y-2">
+              <Label htmlFor="pallets">Cantidad de Pallets</Label>
+              {isEditing ? (
+                <Input
+                  id="pallets"
+                  type="number"
+                  min="0"
+                  value={editedShipment.pallets || 0}
+                  onChange={(e) => handleChange("pallets", Number.parseInt(e.target.value))}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.pallets || 0}</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="weight">Peso (kg)</Label>
+              {isEditing ? (
+                <Input
+                  id="weight"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editedShipment.weight || 0}
+                  onChange={(e) => handleChange("weight", Number.parseFloat(e.target.value))}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">{shipment.weight || 0} kg</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
+              {isEditing ? (
+                <Input
+                  id="declaredValue"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editedShipment.declaredValue || 0}
+                  onChange={(e) => handleChange("declaredValue", Number.parseFloat(e.target.value))}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">$ {shipment.declaredValue || 0}</div>
+              )}
+            </div>
+
+            {/* Nuevo campo para Costo de Envío */}
+            <div className="space-y-2">
+              <Label htmlFor="shippingCost">Costo de Envío ($)</Label>
+              {isEditing ? (
+                <Input
+                  id="shippingCost"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editedShipment.shippingCost || 0}
+                  onChange={(e) => handleChange("shippingCost", Number.parseFloat(e.target.value))}
+                />
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">$ {shipment.shippingCost || 0}</div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="status">Estado</Label>
+              {isEditing ? (
+                <Select value={editedShipment.status} onValueChange={(value) => handleChange("status", value)}>
+                  <SelectTrigger
+                    onKeyDown={(e) =>
+                      handleSelectKeyDown(
+                        e,
+                        [
+                          { value: "pending", label: "Pendiente" },
+                          { value: "sent", label: "Enviado" },
+                        ],
+                        editedShipment.status,
+                        (value) => handleChange("status", value),
+                      )
+                    }
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pendiente</SelectItem>
+                    <SelectItem value="sent">Enviado</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="p-2 border rounded-md bg-muted/30">
+                  {shipment.status === "sent" ? "Enviado" : "Pendiente"}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Additional Information */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Hash className="h-4 w-4" />
-                Información Adicional
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {isEditing ? (
-                <>
-                  <div>
-                    <Label htmlFor="status">Estado</Label>
-                    <Select
-                      value={formData.status}
-                      onValueChange={(value: "pending" | "sent") => setFormData((prev) => ({ ...prev, status: value }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending">Pendiente</SelectItem>
-                        <SelectItem value="sent">Enviado</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="notes">Observaciones</Label>
-                    <Textarea
-                      id="notes"
-                      value={formData.notes}
-                      onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
-                      rows={3}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Estado:</span>
-                    {getStatusBadge(shipment.status)}
-                  </div>
-                  <div>
-                    <span className="text-sm font-medium">Observaciones:</span>
-                    <p className="text-sm text-muted-foreground mt-1">{shipment.notes || "Sin observaciones"}</p>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Action Buttons */}
-          <div className="flex justify-between">
-            <div>
-              {!isEditing && (
-                <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-                  {isDeleting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Eliminando...
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Eliminar
-                    </>
-                  )}
-                </Button>
-              )}
-            </div>
-
-            <div className="flex gap-4">
-              {isEditing ? (
-                <>
-                  <Button variant="outline" onClick={() => setIsEditing(false)}>
-                    Cancelar
-                  </Button>
-                  <Button onClick={handleSave} disabled={isLoading}>
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Guardando...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="mr-2 h-4 w-4" />
-                        Guardar
-                      </>
-                    )}
-                  </Button>
-                </>
-              ) : (
-                <Button variant="outline" onClick={onClose}>
-                  Cerrar
-                </Button>
-              )}
             </div>
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="invoiceNumber">Número de Factura</Label>
+            {isEditing ? (
+              <div className="flex gap-2">
+                <Select value={invoiceType} onValueChange={(value) => setInvoiceType(value as "A" | "B" | "E")}>
+                  <SelectTrigger
+                    className="w-20"
+                    onKeyDown={(e) =>
+                      handleSelectKeyDown(e, [{ value: "A" }, { value: "B" }, { value: "E" }], invoiceType, (value) =>
+                        setInvoiceType(value as "A" | "B" | "E"),
+                      )
+                    }
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="A">A</SelectItem>
+                    <SelectItem value="B">B</SelectItem>
+                    <SelectItem value="E">E</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  id="invoiceNumber"
+                  placeholder="Número"
+                  value={invoiceNumber}
+                  onChange={(e) => setInvoiceNumber(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
+            ) : (
+              <div className="p-2 border rounded-md bg-muted/30">{shipment.invoiceNumber}</div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="remitNumber">Número de Remito</Label>
+            {isEditing ? (
+              <div className="flex gap-2">
+                <Select value={remitType} onValueChange={(value) => setRemitType(value as "R" | "X" | "RM")}>
+                  <SelectTrigger
+                    className="w-20"
+                    onKeyDown={(e) =>
+                      handleSelectKeyDown(e, [{ value: "R" }, { value: "X" }, { value: "RM" }], remitType, (value) =>
+                        setRemitType(value as "R" | "X" | "RM"),
+                      )
+                    }
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="R">R</SelectItem>
+                    <SelectItem value="X">X</SelectItem>
+                    <SelectItem value="RM">RM</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  id="remitNumber"
+                  placeholder="Número"
+                  value={remitNumber}
+                  onChange={(e) => setRemitNumber(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
+            ) : (
+              <div className="p-2 border rounded-md bg-muted/30">{shipment.remitNumber}</div>
+            )}
+          </div>
+
+          {/* Campo de Nota de Entrega como input de texto */}
+          <div className="space-y-2">
+            <Label htmlFor="deliveryNote">Nota de Entrega</Label>
+            {isEditing ? (
+              <Input
+                id="deliveryNote"
+                placeholder="Ingrese el número de nota de entrega"
+                value={editedShipment.deliveryNote || ""}
+                onChange={(e) => handleChange("deliveryNote", e.target.value)}
+              />
+            ) : (
+              <div className="p-2 border rounded-md bg-muted/30">{shipment.deliveryNote || "Sin nota"}</div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="notes">Aclaraciones</Label>
+            {isEditing ? (
+              <Textarea
+                id="notes"
+                value={editedShipment.notes}
+                onChange={(e) => handleChange("notes", e.target.value)}
+              />
+            ) : (
+              <div className="p-2 border rounded-md bg-muted/30">{shipment.notes}</div>
+            )}
+          </div>
+
+          <div className="flex space-x-4">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="hasColdChain"
+                checked={isEditing ? editedShipment.hasColdChain : shipment.hasColdChain}
+                onCheckedChange={(checked) => handleChange("hasColdChain", checked as boolean)}
+                disabled={!isEditing}
+              />
+              <Label htmlFor="hasColdChain">Cadena de Frío</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="isUrgent"
+                checked={isEditing ? editedShipment.isUrgent : shipment.isUrgent}
+                onCheckedChange={(checked) => handleChange("isUrgent", checked as boolean)}
+                disabled={!isEditing}
+              />
+              <Label htmlFor="isUrgent">Urgente</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="isFragile"
+                checked={isEditing ? editedShipment.isFragile : shipment.isFragile}
+                onCheckedChange={(checked) => handleChange("isFragile", checked as boolean)}
+                disabled={!isEditing}
+              />
+              <Label htmlFor="isFragile">Muy Frágil</Label>
+            </div>
+          </div>
+
+          {shipment.attachments && shipment.attachments.length > 0 && (
+            <div className="space-y-2">
+              <Label>Documentos adjuntos</Label>
+              <div className="space-y-2">
+                {shipment.attachments.map((url, index) => (
+                  <div key={index} className="p-2 border rounded-md bg-muted/30 flex justify-between items-center">
+                    <span>Documento {index + 1}</span>
+                    <Button variant="ghost" size="sm" asChild>
+                      <a href={url} target="_blank" rel="noopener noreferrer">
+                        Ver
+                      </a>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+
+        {!isEditing && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <h3 className="text-sm font-medium">Cliente</h3>
+              <p>{shipment.client}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Transporte</h3>
+              <p>{shipment.transport}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Pallets</h3>
+              <p>{shipment.pallets || "0"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Bultos</h3>
+              <p>{shipment.packages}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Peso</h3>
+              <p>{shipment.weight ? `${shipment.weight.toFixed(2)} kg` : "No especificado"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Valor Declarado</h3>
+              <p>{shipment.declaredValue ? `$${shipment.declaredValue.toFixed(2)}` : "No especificado"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Costo de Envío</h3>
+              <p>{shipment.shippingCost ? `$${shipment.shippingCost.toFixed(2)}` : "No especificado"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Factura</h3>
+              <p>{shipment.invoiceNumber || "No especificado"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Remito</h3>
+              <p>{shipment.remitNumber || "No especificado"}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium">Nota de Entrega</h3>
+              <p>{shipment.deliveryNote || "Sin nota"}</p>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter className="flex justify-between sm:justify-between">
+          {isEditing ? (
+            <>
+              <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
+                <X className="mr-2 h-4 w-4" /> Cancelar
+              </Button>
+              <Button onClick={handleSave} disabled={isSaving || !selectedClient || !selectedAddress}>
+                {isSaving ? (
+                  <>
+                    <span className="spinner mr-2"></span> Guardando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-2 h-4 w-4" /> Guardar
+                  </>
+                )}
+              </Button>
+            </>
+          ) : (
+            <>
+              {showPrintButton ? (
+                <>
+                  <Button variant="outline" onClick={handleEdit}>
+                    <Edit className="mr-2 h-4 w-4" /> Editar
+                  </Button>
+                  <Button onClick={handlePrintLabels}>
+                    <Printer className="mr-2 h-4 w-4" /> Imprimir Etiquetas
+                  </Button>
+                </>
+              ) : (
+                <div className="w-full flex justify-center">
+                  <Button onClick={handleEdit}>
+                    <Edit className="mr-2 h-4 w-4" /> Editar
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

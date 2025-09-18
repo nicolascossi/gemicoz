@@ -329,7 +329,7 @@ export default function DashboardContent() {
       <div className="flex justify-between items-center mb-6 px-4">
         <h1 className="text-2xl font-bold">Gestion de Envíos - Gemico</h1>
         <div className="flex space-x-2">
-          <Button variant="outline" onClick={() => router.push("/envios-por-fecha")}>
+          <Button variant="outline" onClick={handleViewShipmentsByDate}>
             Plantillas de Envios
           </Button>
         </div>
