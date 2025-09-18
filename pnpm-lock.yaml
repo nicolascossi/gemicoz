@@ -180,7 +180,7 @@ importers:
         specifier: latest
         version: 5.5.3
       qrcode:
-        specifier: latest
+        specifier: ^1.5.3
         version: 1.5.4
       react:
         specifier: ^18

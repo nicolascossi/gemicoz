@@ -1,240 +1,241 @@
 "use client"
 
-import { Card, CardContent } from "@/components/ui/card"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
 import type { Shipment } from "@/lib/types"
+import { generateQRCode } from "@/lib/qr-utils"
 import { useEffect, useState } from "react"
-import QRCode from "qrcode"
 import Image from "next/image"
 
 interface ShipmentLabelProps {
   shipment: Shipment
   labelNumber: number
   totalLabels: number
-  isLast: boolean
-  labelType?: "numbered" | "bulk"
+  labelType?: "package" | "pallet"
 }
 
 export default function ShipmentLabel({
   shipment,
   labelNumber,
   totalLabels,
-  isLast,
-  labelType = "numbered",
+  labelType = "package",
 }: ShipmentLabelProps) {
-  const [qrCode, setQrCode] = useState<string>("")
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>("")
 
   useEffect(() => {
     const generateQR = async () => {
       try {
-        const qrUrl = `${window.location.origin}/pedido/${shipment.shipmentNumber}`
-        const qrCodeDataUrl = await QRCode.toDataURL(qrUrl, {
-          margin: 1,
-          width: 120,
-        })
-        setQrCode(qrCodeDataUrl)
-      } catch (err) {
-        console.error("Error generating QR code:", err)
+        const qrData = `${process.env.NEXT_PUBLIC_BASE_URL || "https://gemico-envios.vercel.app"}/pedido/${shipment.shipmentNumber}`
+        const qrUrl = await generateQRCode(qrData)
+        setQrCodeUrl(qrUrl)
+      } catch (error) {
+        console.error("Error generating QR code:", error)
       }
     }
+
     generateQR()
   }, [shipment.shipmentNumber])
 
-  // Determine what text to display for pallets and packages on separate lines
-  const getPackageLines = () => {
-    const hasPallets = shipment.pallets && shipment.pallets > 0
-    const hasPackages = shipment.packages && shipment.packages > 0
-    let palletsLine = ""
-    let packagesLine = ""
+  const formatAddress = (address: string) => {
+    if (!address) return "Dirección no especificada"
 
-    // Si solo hay pallets (packages = 0)
-    if (hasPallets && !hasPackages) {
-      if (labelType === "numbered") {
-        packagesLine = `Pallet ${labelNumber}/${totalLabels}`
-      } else {
-        packagesLine = `${totalLabels} ${totalLabels === 1 ? "Pallet" : "Pallets"}`
-      }
-      return { palletsLine, packagesLine }
-    }
-
-    // Si hay pallets y packages
-    if (hasPallets) {
-      palletsLine = `${shipment.pallets} ${shipment.pallets === 1 ? "Pallet" : "Pallets"}`
-    }
-
-    // Si hay packages (o si no hay ni pallets ni packages, mostrar bultos por defecto)
-    if (hasPackages || (!hasPallets && !hasPackages)) {
-      const packagesCount = shipment.packages || 0
-      if (labelType === "numbered") {
-        packagesLine = `Bulto ${labelNumber}/${totalLabels}`
-      } else {
-        packagesLine = `${totalLabels} ${totalLabels === 1 ? "Bulto" : "Bultos"}`
-      }
-
-      // Add ampersand to the beginning of packages line if there are pallets
-      if (hasPallets) {
-        packagesLine = `& ${packagesLine}`
+    // Si la dirección es muy larga, dividirla en líneas
+    if (address.length > 50) {
+      const parts = address.split(",")
+      if (parts.length > 1) {
+        return (
+          <div>
+            <div>{parts[0].trim()}</div>
+            <div>{parts.slice(1).join(",").trim()}</div>
+          </div>
+        )
       }
     }
 
-    return { palletsLine, packagesLine }
+    return address
   }
 
-  // Separar la dirección y la localidad
-  const getAddressParts = () => {
-    if (!shipment.clientAddress) return { street: "", city: "" }
-
-    // Intentar separar por coma
-    const parts = shipment.clientAddress.split(",")
-
-    if (parts.length > 1) {
-      // Si hay coma, la primera parte es la calle y el resto es la localidad
-      const street = parts[0].trim()
-      // Unir el resto de partes por si hay más de una coma
-      const city = parts.slice(1).join(",").trim()
-      return { street, city }
+  const getLabelText = () => {
+    if (labelType === "pallet") {
+      return `Pallet ${labelNumber}/${totalLabels}`
     } else {
-      // Si no hay coma, intentar buscar un título entre corchetes
-      const titleMatch = shipment.clientAddress.match(/\[(.*?)\]/)
-      if (titleMatch) {
-        // Si hay título, quitar el título y usar todo como calle
-        const street = shipment.clientAddress.replace(/\[.*?\]/, "").trim()
-        return { street, city: titleMatch[1] }
-      }
-      // Si no hay coma ni título, usar todo como calle
-      return { street: shipment.clientAddress, city: "" }
+      return `Bulto ${labelNumber}/${totalLabels}`
     }
   }
-
-  const addressParts = getAddressParts()
-  const { palletsLine, packagesLine } = getPackageLines()
 
   return (
-    <Card
-      className={`border border-border w-[15cm] h-[10cm] mx-auto overflow-hidden bg-white text-black ${!isLast ? "print:break-after-page" : ""}`}
-    >
-      <CardContent className="p-3 flex flex-col h-full justify-between">
-        {/* Sección superior - Encabezado y datos principales */}
-        <div className="flex flex-col gap-2">
-          {/* Encabezado - Fila superior */}
-          <div className="flex justify-between items-start">
-            <div className="flex items-center gap-2">
-              <Image
-                src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
-                alt="Gemico Logo"
-                width={100}
-                height={50}
-                className="object-contain"
-                priority
-              />
-              <div>
-                <h2 className="text-lg font-bold leading-tight">EQUIPO GEMICO S.A.</h2>
-                <p className="text-sm text-gray-600 leading-tight">Vicente Lopez 749, Bahía Blanca</p>
-                <p className="text-sm text-gray-600 leading-tight">Tel: 291-4521744</p>
-              </div>
-            </div>
-            <div className="text-right">
-              {palletsLine && <p className="text-2xl font-bold leading-tight">{palletsLine}</p>}
-              <p className="text-2xl font-bold leading-tight">{packagesLine}</p>
-              <p className="text-sm leading-tight">Peso: {shipment.weight || 0} kg</p>
-              <p className="text-xs leading-tight">{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</p>
+    <div className="w-full max-w-4xl mx-auto bg-white border-2 border-gray-300 p-6 print:border-black print:max-w-none print:mx-0">
+      {/* Header with Logo and Company Info */}
+      <div className="flex justify-between items-start mb-6">
+        <div className="flex items-center space-x-4">
+          <Image
+            src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
+            alt="Gemico Logo"
+            width={120}
+            height={60}
+            className="object-contain"
+            priority
+          />
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">GEMICO</h1>
+            <p className="text-sm text-gray-600">Gestión de Envíos</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-3xl font-bold text-blue-600 mb-2">{getLabelText()}</div>
+          <div className="text-lg font-semibold">{shipment.shipmentNumber}</div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="grid grid-cols-3 gap-6 mb-6">
+        {/* Left Column - Sender Info */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Remitente</h3>
+            <div className="text-lg font-semibold">GEMICO</div>
+            <div className="text-sm text-gray-600">
+              <div>Av. Corrientes 1234</div>
+              <div>CABA, Argentina</div>
+              <div>Tel: (011) 4567-8900</div>
             </div>
           </div>
 
-          {/* Contenido principal - Dos columnas */}
-          <div className="flex gap-3">
-            {/* Columna izquierda - Información del envío */}
-            <div className="flex-1 flex flex-col gap-2">
-              {/* Cliente */}
-              <div>
-                <p className="text-xs text-gray-600 mb-0">Cliente</p>
-                <p className="text-xl font-bold mb-2">{shipment.client}</p>
+          <div>
+            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Transporte</h3>
+            <div className="text-lg font-semibold">{shipment.transport}</div>
+          </div>
+        </div>
 
-                <p className="text-xs text-gray-600 mb-0">Dirección</p>
-                <div className="mb-2">
-                  <p className="text-lg">{addressParts.street}</p>
-                  {addressParts.city && <p className="text-lg">{addressParts.city}</p>}
+        {/* Center Column - Recipient Info */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Destinatario</h3>
+            <div className="text-lg font-semibold mb-2">{shipment.client}</div>
+            <div className="text-sm text-gray-800">{formatAddress(shipment.clientAddress)}</div>
+          </div>
 
-                  {/* Si el título no está incluido en clientAddress pero existe en clientAddressTitle, mostrarlo */}
-                  {!shipment.clientAddress.includes("[") && shipment.clientAddressTitle && (
-                    <p className="text-lg">[{shipment.clientAddressTitle}]</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Transporte */}
-              <div className="border-t pt-2">
-                <p className="text-xs text-gray-600 mb-0">Transporte</p>
-                <p className="text-base font-semibold leading-tight">{shipment.transport}</p>
-              </div>
-
-              {/* Número de Remito o Nota de Entrega */}
-              {shipment.remitNumber && (
-                <div>
-                  <p className="text-xs text-gray-600 mb-0">Número de Remito</p>
-                  <p className="text-sm font-semibold">{shipment.remitNumber}</p>
-                </div>
-              )}
-
-              {shipment.deliveryNote && !shipment.remitNumber && (
-                <div>
-                  <p className="text-xs text-gray-600 mb-0">Nota de Entrega</p>
-                  <p className="text-sm font-semibold">{shipment.deliveryNote}</p>
-                </div>
-              )}
-
-              {/* Nota de Entrega */}
-              {shipment.deliveryNote && (
-                <div>
-                  <p className="text-xs text-gray-600 mb-0">Nota de Entrega</p>
-                  <p className="text-sm font-semibold">{shipment.deliveryNote}</p>
-                </div>
-              )}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Fecha</h4>
+              <div className="text-sm">{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</div>
             </div>
-
-            {/* Columna derecha - QR */}
-            <div className="w-[5cm] flex flex-col items-center justify-start">
-              {/* QR Code */}
-              <div className="flex flex-col items-center justify-center mb-2">
-                {qrCode && <img src={qrCode || "/placeholder.svg"} alt="QR Code" className="w-28 h-28" />}
-                <p className="text-center text-xs text-gray-600 mt-1">Escanee para ver detalles</p>
-              </div>
-
-              {/* Indicators stacked vertically */}
-              <div className="w-full flex flex-col gap-1">
-                {/* Texto de medicamentos - condicional según cadena de frío */}
-                {shipment.hasColdChain ? (
-                  <div className="w-full text-center font-bold text-[0.65rem] bg-blue-100 border border-blue-400 p-0.5 rounded">
-                    MEDICAMENTOS CON CADENA DE FRIO (DE 2° A 8°)
-                  </div>
-                ) : (
-                  <div className="w-full text-center font-bold text-[0.65rem] bg-yellow-100 border border-yellow-400 p-0.5 rounded">
-                    MEDICAMENTOS{" "}
-                    <span className="text-[0.65rem] font-normal">(MANTENER EN AMBIENTE CONTROLADO DE 15° A 25°)</span>
-                  </div>
-                )}
-
-                {/* Indicadores condicionales */}
-                {shipment.isUrgent && (
-                  <div className="w-full text-center font-bold text-[0.65rem] bg-red-100 border border-red-400 p-0.5 rounded">
-                    URGENTE
-                  </div>
-                )}
-
-                {shipment.isFragile && (
-                  <div className="w-full text-center font-extrabold text-base bg-purple-100 border-2 border-purple-500 p-1 rounded">
-                    MUY FRÁGIL
-                  </div>
-                )}
-              </div>
+            <div>
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Peso</h4>
+              <div className="text-sm">{shipment.weight ? `${shipment.weight.toFixed(2)} kg` : "N/A"}</div>
             </div>
           </div>
         </div>
 
-        {/* Sección inferior - Advertencias */}
-        <div className="mt-auto"></div>
-      </CardContent>
-    </Card>
+        {/* Right Column - QR Code and Details */}
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            {qrCodeUrl && (
+              <div className="text-center">
+                <Image
+                  src={qrCodeUrl || "/placeholder.svg"}
+                  alt="QR Code"
+                  width={120}
+                  height={120}
+                  className="border border-gray-300"
+                />
+                <p className="text-xs text-gray-600 mt-2">Escanear para seguimiento</p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {shipment.invoiceNumber && (
+              <div>
+                <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Factura</h4>
+                <div className="text-sm">{shipment.invoiceNumber}</div>
+              </div>
+            )}
+            {shipment.remitNumber && (
+              <div>
+                <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Remito</h4>
+                <div className="text-sm">{shipment.remitNumber}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Package Details */}
+      <div className="border-t border-gray-300 pt-4 mb-4">
+        <div className="grid grid-cols-4 gap-4">
+          <div>
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">
+              {labelType === "pallet" ? "Pallets" : "Bultos"}
+            </h4>
+            <div className="text-lg font-semibold">
+              {labelType === "pallet" ? shipment.pallets || 0 : shipment.packages || 0}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Peso Total</h4>
+            <div className="text-lg font-semibold">{shipment.weight ? `${shipment.weight.toFixed(2)} kg` : "N/A"}</div>
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Valor Declarado</h4>
+            <div className="text-lg font-semibold">
+              ${shipment.declaredValue ? shipment.declaredValue.toFixed(2) : "0.00"}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1">Estado</h4>
+            <div
+              className={`text-sm font-semibold ${shipment.status === "sent" ? "text-green-600" : "text-orange-600"}`}
+            >
+              {shipment.status === "sent" ? "ENVIADO" : "PENDIENTE"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Special Handling Instructions */}
+      {(shipment.hasColdChain || shipment.isUrgent || shipment.isFragile) && (
+        <div className="border-t border-gray-300 pt-4 mb-4">
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Instrucciones Especiales</h4>
+          <div className="flex flex-wrap gap-2">
+            {shipment.hasColdChain && (
+              <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded-full">
+                CADENA DE FRÍO
+              </span>
+            )}
+            {shipment.isUrgent && (
+              <span className="px-3 py-1 bg-red-100 text-red-800 text-xs font-semibold rounded-full">URGENTE</span>
+            )}
+            {shipment.isFragile && (
+              <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full">FRÁGIL</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Notes */}
+      {shipment.notes && (
+        <div className="border-t border-gray-300 pt-4 mb-4">
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Observaciones</h4>
+          <div className="text-sm text-gray-800">{shipment.notes}</div>
+        </div>
+      )}
+
+      {/* Delivery Note */}
+      {shipment.deliveryNote && (
+        <div className="border-t border-gray-300 pt-4 mb-4">
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Nota de Entrega</h4>
+          <div className="text-sm text-gray-800">{shipment.deliveryNote}</div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="border-t border-gray-300 pt-4 text-center">
+        <div className="text-xs text-gray-600">
+          <div>Para consultas: info@gemico.com.ar | Tel: (011) 4567-8900</div>
+          <div className="mt-1">Generado el {format(new Date(), "dd/MM/yyyy HH:mm", { locale: es })}</div>
+        </div>
+      </div>
+    </div>
   )
 }

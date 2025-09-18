@@ -1,43 +1,43 @@
 "use client"
 
-import type React from "react"
-
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Printer, ArrowLeft } from "lucide-react"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ArrowLeft, Printer } from "lucide-react"
+import { ref, get } from "firebase/database"
+import { rtdb } from "@/lib/firebase"
 import type { Shipment } from "@/lib/types"
 import ShipmentLabel from "@/components/shipment-label"
-import { ref, get } from "firebase/database"
-import { db } from "@/lib/firebase"
+import { format } from "date-fns"
+import { es } from "date-fns/locale"
 
 export default function PrintLabelsPage() {
   const params = useParams()
   const router = useRouter()
   const [shipment, setShipment] = useState<Shipment | null>(null)
-  const [labels, setLabels] = useState<number[]>([])
-  const [labelType, setLabelType] = useState<"numbered" | "bulk">("numbered")
-  const [labelCount, setLabelCount] = useState<number>(0)
-  const [customLabelCount, setCustomLabelCount] = useState<number>(0)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchShipment = async () => {
-      const shipmentId = params.id as string
-      const shipmentRef = ref(db, `shipments/${shipmentId}`)
-      const snapshot = await get(shipmentRef)
+      if (!params.id) return
 
-      if (snapshot.exists()) {
-        const shipmentData = { id: snapshot.key, ...snapshot.val() } as Shipment
-        setShipment(shipmentData)
+      try {
+        const shipmentRef = ref(rtdb, `shipments/${params.id}`)
+        const snapshot = await get(shipmentRef)
 
-        // Determinar el total de etiquetas basado en bultos y pallets
-        const totalLabels = getTotalLabels(shipmentData)
-        setLabelCount(totalLabels)
-        setCustomLabelCount(totalLabels)
-        setLabels(Array.from({ length: totalLabels }, (_, i) => i + 1))
+        if (snapshot.exists()) {
+          const shipmentData = { id: params.id as string, ...snapshot.val() } as Shipment
+          setShipment(shipmentData)
+        } else {
+          setError("Envío no encontrado")
+        }
+      } catch (error) {
+        console.error("Error fetching shipment:", error)
+        setError("Error al cargar el envío")
+      } finally {
+        setIsLoading(false)
       }
     }
 
@@ -59,118 +59,141 @@ export default function PrintLabelsPage() {
       return pallets
     }
 
-    // Si no hay ni bultos ni pallets, retornar 1 como mínimo
+    // Si no hay ni bultos ni pallets, generar al menos 1 etiqueta
     return 1
+  }
+
+  // Función para determinar el tipo de etiqueta
+  const getLabelType = (shipment: Shipment): "package" | "pallet" => {
+    const packages = shipment.packages || 0
+    const pallets = shipment.pallets || 0
+
+    // Si hay bultos, las etiquetas son de tipo package
+    if (packages > 0) {
+      return "package"
+    }
+
+    // Si no hay bultos pero hay pallets, las etiquetas son de tipo pallet
+    if (pallets > 0) {
+      return "pallet"
+    }
+
+    // Por defecto, usar package
+    return "package"
   }
 
   const handlePrint = () => {
     window.print()
   }
 
-  const handleLabelTypeChange = (value: string) => {
-    setLabelType(value as "numbered" | "bulk")
+  const handleBack = () => {
+    router.back()
   }
 
-  const handleCustomLabelCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const count = Number.parseInt(e.target.value)
-    if (!isNaN(count) && count > 0) {
-      setCustomLabelCount(count)
-    }
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900 mx-auto"></div>
+          <p className="mt-4 text-lg">Cargando envío...</p>
+        </div>
+      </div>
+    )
   }
 
-  const generateLabels = () => {
-    if (labelType === "numbered") {
-      return Array.from({ length: labelCount }, (_, i) => i + 1)
-    } else {
-      return Array.from({ length: customLabelCount }, (_, i) => 0)
-    }
+  if (error || !shipment) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-lg text-red-600">{error || "Envío no encontrado"}</p>
+          <Button onClick={handleBack} className="mt-4">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Volver
+          </Button>
+        </div>
+      </div>
+    )
   }
 
-  if (!shipment) {
-    return <div className="p-8 text-center bg-white text-black">Cargando...</div>
-  }
-
-  const displayLabels = labelType === "numbered" ? labels : generateLabels()
   const totalLabels = getTotalLabels(shipment)
+  const labelType = getLabelType(shipment)
 
   return (
-    <div className="container mx-auto p-4 bg-white text-black">
-      <div className="print:hidden mb-6 flex justify-between items-center">
-        <div className="flex items-center">
-          <Button variant="outline" onClick={() => router.back()} className="mr-4">
-            <ArrowLeft className="h-4 w-4 mr-2" /> Volver
-          </Button>
-          <h1 className="text-2xl font-bold">Etiquetas para Envío {shipment.shipmentNumber}</h1>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header - Hidden when printing */}
+      <div className="print:hidden bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center space-x-4">
+              <Button variant="outline" onClick={handleBack}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Volver
+              </Button>
+              <div>
+                <h1 className="text-xl font-semibold">Etiquetas de Envío</h1>
+                <p className="text-sm text-gray-600">
+                  {shipment.shipmentNumber} - {shipment.client}
+                </p>
+              </div>
+            </div>
+            <div className="flex space-x-2">
+              <Button onClick={handlePrint}>
+                <Printer className="mr-2 h-4 w-4" />
+                Imprimir
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="print:hidden mb-6 border p-4 rounded-md">
-        <h2 className="text-lg font-semibold mb-4">Opciones de impresión</h2>
-
-        <RadioGroup defaultValue="numbered" value={labelType} onValueChange={handleLabelTypeChange} className="mb-4">
-          <div className="flex items-center space-x-2 mb-2">
-            <RadioGroupItem value="numbered" id="numbered" />
-            <Label htmlFor="numbered">
-              Etiquetas numeradas (1/{totalLabels}, 2/{totalLabels}, etc.)
-            </Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <RadioGroupItem value="bulk" id="bulk" />
-            <Label htmlFor="bulk">
-              Etiquetas con total de {shipment.packages > 0 ? "bultos" : "pallets"} ({totalLabels}{" "}
-              {shipment.packages > 0 ? "bultos" : "pallets"})
-            </Label>
-          </div>
-        </RadioGroup>
-
-        {labelType === "bulk" && (
-          <div className="mb-4">
-            <Label htmlFor="labelCount" className="block mb-2">
-              Cantidad de etiquetas a imprimir:
-            </Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="labelCount"
-                type="number"
-                min="1"
-                value={customLabelCount}
-                onChange={handleCustomLabelCountChange}
-                className="w-24"
-              />
-              <span>
-                de {totalLabels} {shipment.packages > 0 ? "bultos" : "pallets"} totales
-              </span>
+      {/* Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0">
+        {/* Shipment Info - Hidden when printing */}
+        <Card className="mb-8 print:hidden">
+          <CardHeader>
+            <CardTitle>Información del Envío</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Número de Envío</p>
+                <p className="text-lg">{shipment.shipmentNumber}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">Cliente</p>
+                <p className="text-lg">{shipment.client}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">Fecha</p>
+                <p className="text-lg">{format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">{labelType === "pallet" ? "Pallets" : "Bultos"}</p>
+                <p className="text-lg">{labelType === "pallet" ? shipment.pallets || 0 : shipment.packages || 0}</p>
+              </div>
             </div>
-          </div>
-        )}
+            <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+              <p className="text-sm text-blue-800">
+                Se generarán <strong>{totalLabels}</strong> etiqueta{totalLabels !== 1 ? "s" : ""} de tipo{" "}
+                <strong>{labelType === "pallet" ? "Pallet" : "Bulto"}</strong>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
 
-        <Button onClick={handlePrint}>
-          <Printer className="mr-2 h-4 w-4" /> Imprimir {displayLabels.length} etiqueta(s)
-        </Button>
-      </div>
-
-      <div className="flex flex-col items-center gap-6 print:gap-0">
-        {displayLabels.map((labelNumber, index) => (
-          <ShipmentLabel
-            key={index}
-            shipment={shipment}
-            labelNumber={labelNumber}
-            totalLabels={totalLabels}
-            isLast={index === displayLabels.length - 1}
-            labelType={labelType}
-          />
-        ))}
-      </div>
-
-      {/* Instrucciones de impresión */}
-      <div className="print:hidden">
-        <h2 className="text-lg font-semibold mt-6 mb-2">Instrucciones de impresión</h2>
-        <ul className="list-disc pl-5 space-y-1">
-          <li>Asegúrese de que la impresora esté configurada para papel de 15cm x 10cm</li>
-          <li>Desactive la opción "Ajustar a página" en su diálogo de impresión</li>
-          <li>Configure los márgenes de impresión a 0 o "ninguno"</li>
-          <li>Seleccione orientación "Horizontal" o "Landscape"</li>
-        </ul>
+        {/* Labels */}
+        <div className="space-y-4 print:space-y-0">
+          {Array.from({ length: totalLabels }, (_, index) => (
+            <div key={index} className="print:break-after-page last:print:break-after-auto">
+              <ShipmentLabel
+                shipment={shipment}
+                labelNumber={index + 1}
+                totalLabels={totalLabels}
+                labelType={labelType}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
