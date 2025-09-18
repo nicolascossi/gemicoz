@@ -44,24 +44,37 @@ export default function ShipmentLabel({
   // Determine what text to display for pallets and packages on separate lines
   const getPackageLines = () => {
     const hasPallets = shipment.pallets && shipment.pallets > 0
+    const hasPackages = shipment.packages && shipment.packages > 0
     let palletsLine = ""
     let packagesLine = ""
 
-    // Set pallets line if there are pallets
-    if (hasPallets) {
-      palletsLine = `${shipment.pallets} Pallets`
+    // Si solo hay pallets (packages = 0)
+    if (hasPallets && !hasPackages) {
+      if (labelType === "numbered") {
+        packagesLine = `Pallet ${labelNumber}/${totalLabels}`
+      } else {
+        packagesLine = `${totalLabels} ${totalLabels === 1 ? "Pallet" : "Pallets"}`
+      }
+      return { palletsLine, packagesLine }
     }
 
-    // Set packages line based on label type
-    if (labelType === "numbered") {
-      packagesLine = `Bulto ${labelNumber}/${totalLabels}`
-    } else {
-      packagesLine = `${totalLabels} Bultos`
+    // Si hay pallets y packages
+    if (hasPallets) {
+      palletsLine = `${shipment.pallets} ${shipment.pallets === 1 ? "Pallet" : "Pallets"}`
     }
 
-    // Add ampersand to the beginning of packages line if there are pallets
-    if (hasPallets) {
-      packagesLine = `& ${packagesLine}`
+    // Si hay packages
+    if (hasPackages) {
+      if (labelType === "numbered") {
+        packagesLine = `Bulto ${labelNumber}/${totalLabels}`
+      } else {
+        packagesLine = `${totalLabels} ${totalLabels === 1 ? "Bulto" : "Bultos"}`
+      }
+
+      // Add ampersand to the beginning of packages line if there are pallets
+      if (hasPallets) {
+        packagesLine = `& ${packagesLine}`
+      }
     }
 
     return { palletsLine, packagesLine }
