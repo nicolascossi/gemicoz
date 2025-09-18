@@ -15,7 +15,7 @@ interface ShipmentLabelProps {
 
 export default function ShipmentLabel({ shipment, labelNumber, totalLabels, isPallet = false }: ShipmentLabelProps) {
   // Generate QR code data
-  const qrData = `${process.env.NEXT_PUBLIC_BASE_URL || "https://gemico-envios.vercel.app"}/pedido/${shipment.shipmentNumber}`
+  const qrData = `https://gemico-envios.vercel.app/pedido/${shipment.shipmentNumber}`
 
   // Format package/pallet info
   const getPackageInfo = () => {
