@@ -903,7 +903,7 @@ export default function ShipmentDetailModal({ shipment, onClose, showPrintButton
               <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
                 <X className="mr-2 h-4 w-4" /> Cancelar
               </Button>
-              <Button onClick={handleSave} disabled={isSaving}>
+              <Button onClick={handleSave} disabled={isSaving || !selectedClient || !selectedAddress}>
                 {isSaving ? (
                   <>
                     <span className="spinner mr-2"></span> Guardando...
