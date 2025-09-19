@@ -1,712 +1,535 @@
 "use client"
-import { useState, useEffect } from "react"
+
+import { useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Loader2, Printer, Mail, Trash2, AlertCircle, ExternalLink, Download } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { doc, updateDoc, deleteDoc, Timestamp } from "firebase/firestore"
+import { db } from "@/lib/firebase"
+import { toast } from "@/components/ui/use-toast"
+import type { Shipment } from "@/lib/types"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
-import type { Shipment } from "@/lib/types"
-import { ref, update, remove } from "firebase/database"
-import { rtdb } from "@/lib/firebase"
-import { useToast } from "@/components/ui/use-toast"
-import { useRouter } from "next/navigation"
+import { Package, Truck, MapPin, Calendar, FileText, Edit, Trash2, Mail, Printer, Save, X } from "lucide-react"
 
 interface ShipmentDetailModalProps {
-  shipment: Shipment | null
+  shipment: Shipment
+  isOpen: boolean
   onClose: () => void
-  onUpdate?: (updatedShipment: Shipment) => void
-  onDelete?: (deletedShipmentId: string) => void
-  showPrintButton?: boolean
 }
 
-export default function ShipmentDetailModal({
-  shipment,
-  onClose,
-  onUpdate,
-  onDelete,
-  showPrintButton = true,
-}: ShipmentDetailModalProps) {
+export default function ShipmentDetailModal({ shipment, isOpen, onClose }: ShipmentDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isSendingEmail, setIsSendingEmail] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [editedShipment, setEditedShipment] = useState<Shipment | null>(null)
-  const { toast } = useToast()
-  const router = useRouter()
+  const [loading, setLoading] = useState(false)
+  const [emailLoading, setEmailLoading] = useState(false)
 
-  const [remitType, setRemitType] = useState<"R" | "X" | "RM">("R")
-  const [remitNumber, setRemitNumber] = useState("")
-  const [invoiceType, setInvoiceType] = useState<"A" | "B" | "E">("A")
-  const [invoiceNumber, setInvoiceNumber] = useState("")
-
-  useEffect(() => {
-    if (shipment) {
-      setEditedShipment({ ...shipment })
-      setError(null)
-
-      // Parse existing remit number
-      if (shipment.remitNumber) {
-        const remitMatch = shipment.remitNumber.match(/^(R|X|RM)\s*-\s*(?:00006\s*-\s*|R00001\s*-\s*)?(.+)$/)
-        if (remitMatch) {
-          setRemitType(remitMatch[1] as "R" | "X" | "RM")
-          setRemitNumber(remitMatch[2])
-        }
-      }
-
-      // Parse existing invoice number
-      if (shipment.invoiceNumber) {
-        const invoiceMatch = shipment.invoiceNumber.match(/^([ABE])\s*00001-(.+)$/)
-        if (invoiceMatch) {
-          setInvoiceType(invoiceMatch[1] as "A" | "B" | "E")
-          setInvoiceNumber(invoiceMatch[2])
-        }
-      }
-    }
-  }, [shipment])
-
-  useEffect(() => {
-    if (editedShipment && remitNumber) {
-      if (remitType === "R") {
-        setEditedShipment((prev) => ({
-          ...prev!,
-          remitNumber: `${remitType} - 00006 - ${remitNumber}`,
-        }))
-      } else if (remitType === "X") {
-        setEditedShipment((prev) => ({
-          ...prev!,
-          remitNumber: `${remitType} - R00001 - ${remitNumber}`,
-        }))
-      } else if (remitType === "RM") {
-        setEditedShipment((prev) => ({
-          ...prev!,
-          remitNumber: `${remitType} - ${remitNumber}`,
-        }))
-      }
-    } else if (editedShipment) {
-      setEditedShipment((prev) => ({
-        ...prev!,
-        remitNumber: "",
-      }))
-    }
-  }, [remitType, remitNumber, editedShipment])
-
-  useEffect(() => {
-    if (editedShipment && invoiceNumber) {
-      let prefix = ""
-      if (invoiceType === "A") {
-        prefix = "A 00001-"
-      } else if (invoiceType === "B") {
-        prefix = "B 00001-"
-      } else if (invoiceType === "E") {
-        prefix = "E 00004-"
-      }
-
-      setEditedShipment((prev) => ({
-        ...prev!,
-        invoiceNumber: `${prefix}${invoiceNumber}`,
-      }))
-    } else if (editedShipment) {
-      setEditedShipment((prev) => ({
-        ...prev!,
-        invoiceNumber: "",
-      }))
-    }
-  }, [invoiceType, invoiceNumber, editedShipment])
-
-  if (!shipment) return null
-
-  const handleEdit = () => {
-    setIsEditing(true)
-    setError(null)
-  }
-
-  const handleCancelEdit = () => {
-    setIsEditing(false)
-    setEditedShipment({ ...shipment })
-    setError(null)
-  }
+  const [editData, setEditData] = useState({
+    client: shipment.client,
+    clientAddress: shipment.clientAddress || "",
+    transport: shipment.transport,
+    packages: shipment.packages || 0,
+    pallets: shipment.pallets || 0,
+    weight: shipment.weight || 0,
+    declaredValue: shipment.declaredValue || 0,
+    invoiceNumber: shipment.invoiceNumber || "",
+    remitNumber: shipment.remitNumber || "",
+    notes: shipment.notes || "",
+    deliveryNote: shipment.deliveryNote || "",
+    isFragile: shipment.isFragile || false,
+    isUrgent: shipment.isUrgent || false,
+    hasColdChain: shipment.hasColdChain || false,
+    status: shipment.status,
+  })
 
   const handleSave = async () => {
-    if (!editedShipment) return
+    if (!editData.client || !editData.transport) {
+      toast({
+        title: "Error",
+        description: "Cliente y transporte son obligatorios",
+        variant: "destructive",
+      })
+      return
+    }
 
-    setIsLoading(true)
-    setError(null)
+    if (editData.packages === 0 && editData.pallets === 0) {
+      toast({
+        title: "Error",
+        description: "Debe especificar al menos 1 bulto o 1 pallet",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setLoading(true)
 
     try {
-      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
-      const updateData = {
-        ...editedShipment,
-        updatedAt: new Date().toISOString(),
-      }
-
-      await update(shipmentRef, updateData)
-
-      if (onUpdate) {
-        onUpdate(editedShipment)
-      }
+      const shipmentRef = doc(db, "shipments", shipment.id)
+      await updateDoc(shipmentRef, {
+        ...editData,
+        updatedAt: Timestamp.fromDate(new Date()),
+      })
 
       toast({
-        title: "Envío actualizado",
-        description: "Los cambios se han guardado correctamente.",
-        duration: 3000,
+        title: "Éxito",
+        description: "Envío actualizado correctamente",
       })
 
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating shipment:", error)
-      setError("Error al actualizar el envío. Por favor, intente de nuevo.")
       toast({
         title: "Error",
-        description: "No se pudo actualizar el envío.",
+        description: "Error al actualizar el envío",
         variant: "destructive",
-        duration: 5000,
       })
     } finally {
-      setIsLoading(false)
+      setLoading(false)
     }
   }
 
   const handleDelete = async () => {
-    if (!window.confirm("¿Está seguro de que desea eliminar este envío? Esta acción no se puede deshacer.")) {
+    if (!confirm("¿Estás seguro de que quieres eliminar este envío?")) {
       return
     }
 
-    setIsDeleting(true)
-    setError(null)
+    setLoading(true)
 
     try {
-      const shipmentRef = ref(rtdb, `shipments/${shipment.id}`)
-      await remove(shipmentRef)
-
-      if (onDelete) {
-        onDelete(shipment.id)
-      }
+      await deleteDoc(doc(db, "shipments", shipment.id))
 
       toast({
-        title: "Envío eliminado",
-        description: "El envío ha sido eliminado correctamente.",
-        duration: 3000,
+        title: "Éxito",
+        description: "Envío eliminado correctamente",
       })
 
       onClose()
     } catch (error) {
       console.error("Error deleting shipment:", error)
-      setError("Error al eliminar el envío. Por favor, intente de nuevo.")
       toast({
         title: "Error",
-        description: "No se pudo eliminar el envío.",
+        description: "Error al eliminar el envío",
         variant: "destructive",
-        duration: 5000,
       })
     } finally {
-      setIsDeleting(false)
+      setLoading(false)
     }
   }
 
   const handleSendEmail = async () => {
-    setIsSendingEmail(true)
-    setError(null)
+    setEmailLoading(true)
 
     try {
-      const response = await fetch("/api/send-email", {
+      const response = await fetch("/api/send-email-plantilla", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(shipment),
+        body: JSON.stringify({
+          shipmentId: shipment.id,
+          shipmentNumber: shipment.shipmentNumber,
+          client: shipment.client,
+          transport: shipment.transport,
+          packages: shipment.packages || 0,
+          pallets: shipment.pallets || 0,
+          weight: shipment.weight || 0,
+          date: shipment.date,
+          status: shipment.status,
+          invoiceNumber: shipment.invoiceNumber,
+          remitNumber: shipment.remitNumber,
+          notes: shipment.notes,
+          deliveryNote: shipment.deliveryNote,
+          isFragile: shipment.isFragile,
+          isUrgent: shipment.isUrgent,
+          hasColdChain: shipment.hasColdChain,
+          declaredValue: shipment.declaredValue,
+        }),
       })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || "Error al enviar el correo")
+      if (response.ok) {
+        toast({
+          title: "Éxito",
+          description: "Email enviado correctamente",
+        })
+      } else {
+        throw new Error("Error al enviar email")
       }
-
-      toast({
-        title: "Correo enviado",
-        description: "La notificación ha sido enviada al cliente.",
-        duration: 3000,
-      })
     } catch (error) {
       console.error("Error sending email:", error)
-      setError(`Error al enviar el correo: ${error.message}`)
       toast({
         title: "Error",
-        description: "No se pudo enviar el correo de notificación.",
+        description: "Error al enviar el email",
         variant: "destructive",
-        duration: 5000,
       })
     } finally {
-      setIsSendingEmail(false)
+      setEmailLoading(false)
     }
   }
 
-  const handlePrintLabels = () => {
-    router.push(`/print-labels/${shipment.id}`)
+  const handlePrintLabel = () => {
+    window.open(`/print-labels/${shipment.id}`, "_blank")
   }
 
-  const formatDate = (dateString: string) => {
-    try {
-      const date = new Date(dateString)
-      return format(date, "dd 'de' MMMM 'de' yyyy", { locale: es })
-    } catch (error) {
-      return "Fecha inválida"
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "sent":
+        return <Badge className="bg-green-100 text-green-800">Enviado</Badge>
+      case "pending":
+        return <Badge className="bg-yellow-100 text-yellow-800">Pendiente</Badge>
+      case "delivered":
+        return <Badge className="bg-blue-100 text-blue-800">Entregado</Badge>
+      default:
+        return <Badge className="bg-gray-100 text-gray-800">Desconocido</Badge>
     }
   }
-
-  const getTotalLabels = (): number => {
-    if (editedShipment?.packages && editedShipment.packages > 0) {
-      return editedShipment.packages
-    } else if (editedShipment?.pallets && editedShipment.pallets > 0) {
-      return editedShipment.pallets
-    } else {
-      return 1
-    }
-  }
-
-  const currentShipment = editedShipment || shipment
 
   return (
-    <Dialog open={!!shipment} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span>Detalles del Envío</span>
-            <Badge variant={currentShipment.status === "sent" ? "default" : "secondary"}>
-              {currentShipment.status === "sent" ? "Enviado" : "Pendiente"}
-            </Badge>
-          </DialogTitle>
-          <DialogDescription>
-            Envío #{currentShipment.shipmentNumber} - {formatDate(currentShipment.date)}
-          </DialogDescription>
+          <div className="flex justify-between items-center">
+            <DialogTitle className="text-2xl font-bold text-blue-600">Envío #{shipment.shipmentNumber}</DialogTitle>
+            {getStatusBadge(isEditing ? editData.status : shipment.status)}
+          </div>
         </DialogHeader>
 
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+        <div className="space-y-6">
+          {/* Información básica */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-lg font-semibold">
+                <MapPin className="h-5 w-5 text-blue-600" />
+                Cliente
+              </div>
+              {isEditing ? (
+                <Input
+                  value={editData.client}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, client: e.target.value }))}
+                  placeholder="Nombre del cliente"
+                />
+              ) : (
+                <p className="text-gray-900 font-medium">{shipment.client}</p>
+              )}
 
-        <div className="grid gap-4 py-4">
-          {/* Basic Information */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="shipmentNumber">Número de Envío</Label>
-              <Input id="shipmentNumber" value={currentShipment.shipmentNumber} readOnly />
+              <div className="text-sm font-medium text-gray-600">Dirección:</div>
+              {isEditing ? (
+                <Textarea
+                  value={editData.clientAddress}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, clientAddress: e.target.value }))}
+                  placeholder="Dirección del cliente"
+                  rows={2}
+                />
+              ) : (
+                <p className="text-gray-700">{shipment.clientAddress || "No especificada"}</p>
+              )}
             </div>
-            <div>
-              <Label htmlFor="date">Fecha de Despacho</Label>
-              <Input
-                id="date"
-                type="date"
-                value={currentShipment.date?.split("T")[0] || ""}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    date: e.target.value,
-                  }))
-                }
-                readOnly={!isEditing}
-              />
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-lg font-semibold">
+                <Truck className="h-5 w-5 text-blue-600" />
+                Transporte
+              </div>
+              {isEditing ? (
+                <Input
+                  value={editData.transport}
+                  onChange={(e) => setEditData((prev) => ({ ...prev, transport: e.target.value }))}
+                  placeholder="Nombre del transporte"
+                />
+              ) : (
+                <p className="text-gray-900 font-medium">{shipment.transport}</p>
+              )}
+
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <Calendar className="h-4 w-4" />
+                <span>Fecha: {format(new Date(shipment.date), "dd/MM/yyyy", { locale: es })}</span>
+              </div>
             </div>
           </div>
 
-          {/* Client Information */}
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="client">Cliente</Label>
-              <Input id="client" value={currentShipment.client} readOnly />
+          {/* Detalles del envío */}
+          <div className="border-t pt-6">
+            <div className="flex items-center gap-2 text-lg font-semibold mb-4">
+              <Package className="h-5 w-5 text-blue-600" />
+              Detalles del Envío
             </div>
-            <div>
-              <Label htmlFor="clientAddress">Dirección del Cliente</Label>
-              <Textarea
-                id="clientAddress"
-                value={currentShipment.clientAddress || ""}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    clientAddress: e.target.value,
-                  }))
-                }
-                readOnly={!isEditing}
-                rows={2}
-              />
-            </div>
-          </div>
 
-          {/* Transport Information */}
-          <div>
-            <Label htmlFor="transport">Transporte</Label>
-            <Input id="transport" value={currentShipment.transport} readOnly />
-          </div>
-
-          {/* Package Information */}
-          <div className="grid grid-cols-4 gap-4">
-            <div>
-              <Label htmlFor="packages">Bultos</Label>
-              <Input
-                id="packages"
-                type="number"
-                min="0"
-                value={currentShipment.packages || 0}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    packages: Number.parseInt(e.target.value) || 0,
-                  }))
-                }
-                readOnly={!isEditing}
-              />
-            </div>
-            <div>
-              <Label htmlFor="pallets">Pallets</Label>
-              <Input
-                id="pallets"
-                type="number"
-                min="0"
-                value={currentShipment.pallets || 0}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    pallets: Number.parseInt(e.target.value) || 0,
-                  }))
-                }
-                readOnly={!isEditing}
-              />
-            </div>
-            <div>
-              <Label htmlFor="weight">Peso (kg)</Label>
-              <Input
-                id="weight"
-                type="number"
-                step="0.01"
-                min="0"
-                value={currentShipment.weight || 0}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    weight: Number.parseFloat(e.target.value) || 0,
-                  }))
-                }
-                readOnly={!isEditing}
-              />
-            </div>
-            <div>
-              <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
-              <Input
-                id="declaredValue"
-                type="number"
-                step="0.01"
-                min="0"
-                value={currentShipment.declaredValue || 0}
-                onChange={(e) =>
-                  isEditing &&
-                  setEditedShipment((prev) => ({
-                    ...prev!,
-                    declaredValue: Number.parseFloat(e.target.value) || 0,
-                  }))
-                }
-                readOnly={!isEditing}
-              />
-            </div>
-          </div>
-
-          {/* Document Numbers */}
-          {isEditing ? (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="invoiceNumber">Número de Factura</Label>
-                <div className="flex gap-2">
-                  <Select value={invoiceType} onValueChange={(value) => setInvoiceType(value as "A" | "B" | "E")}>
-                    <SelectTrigger className="w-20">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="A">A</SelectItem>
-                      <SelectItem value="B">B</SelectItem>
-                      <SelectItem value="E">E</SelectItem>
-                    </SelectContent>
-                  </Select>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <Label>Bultos</Label>
+                {isEditing ? (
                   <Input
-                    id="invoiceNumber"
-                    placeholder="Número"
-                    value={invoiceNumber}
-                    onChange={(e) => setInvoiceNumber(e.target.value)}
-                    className="flex-1"
+                    type="number"
+                    min="0"
+                    value={editData.packages}
+                    onChange={(e) =>
+                      setEditData((prev) => ({ ...prev, packages: Number.parseInt(e.target.value) || 0 }))
+                    }
                   />
-                </div>
-                {currentShipment.invoiceNumber && (
-                  <p className="text-sm text-muted-foreground">Formato guardado: {currentShipment.invoiceNumber}</p>
+                ) : (
+                  <p className="text-lg font-semibold">{shipment.packages || 0}</p>
                 )}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="remitNumber">Número de Remito</Label>
-                <div className="flex gap-2">
-                  <Select value={remitType} onValueChange={(value) => setRemitType(value as "R" | "X" | "RM")}>
-                    <SelectTrigger className="w-20">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="R">R</SelectItem>
-                      <SelectItem value="X">X</SelectItem>
-                      <SelectItem value="RM">RM</SelectItem>
-                    </SelectContent>
-                  </Select>
+
+              <div>
+                <Label>Pallets</Label>
+                {isEditing ? (
                   <Input
-                    id="remitNumber"
-                    placeholder="Número"
-                    value={remitNumber}
-                    onChange={(e) => setRemitNumber(e.target.value)}
-                    className="flex-1"
+                    type="number"
+                    min="0"
+                    value={editData.pallets}
+                    onChange={(e) =>
+                      setEditData((prev) => ({ ...prev, pallets: Number.parseInt(e.target.value) || 0 }))
+                    }
                   />
-                </div>
-                {currentShipment.remitNumber && (
-                  <p className="text-sm text-muted-foreground">Formato guardado: {currentShipment.remitNumber}</p>
+                ) : (
+                  <p className="text-lg font-semibold">{shipment.pallets || 0}</p>
+                )}
+              </div>
+
+              <div>
+                <Label>Peso (kg)</Label>
+                {isEditing ? (
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editData.weight}
+                    onChange={(e) =>
+                      setEditData((prev) => ({ ...prev, weight: Number.parseFloat(e.target.value) || 0 }))
+                    }
+                  />
+                ) : (
+                  <p className="text-lg font-semibold">
+                    {shipment.weight ? `${shipment.weight} kg` : "No especificado"}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label>Valor Declarado</Label>
+                {isEditing ? (
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editData.declaredValue}
+                    onChange={(e) =>
+                      setEditData((prev) => ({ ...prev, declaredValue: Number.parseFloat(e.target.value) || 0 }))
+                    }
+                  />
+                ) : (
+                  <p className="text-lg font-semibold">
+                    ${shipment.declaredValue ? shipment.declaredValue.toFixed(2) : "0.00"}
+                  </p>
                 )}
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-4">
+          </div>
+
+          {/* Documentos */}
+          <div className="border-t pt-6">
+            <div className="flex items-center gap-2 text-lg font-semibold mb-4">
+              <FileText className="h-5 w-5 text-blue-600" />
+              Documentos
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="invoiceNumber">Número de Factura</Label>
-                <Input id="invoiceNumber" value={currentShipment.invoiceNumber || ""} readOnly />
+                <Label>Número de Factura</Label>
+                {isEditing ? (
+                  <Input
+                    value={editData.invoiceNumber}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                    placeholder="Ej: 001-001-00001234"
+                  />
+                ) : (
+                  <p className="text-gray-900">{shipment.invoiceNumber || "No especificado"}</p>
+                )}
               </div>
+
               <div>
-                <Label htmlFor="remitNumber">Número de Remito</Label>
-                <Input id="remitNumber" value={currentShipment.remitNumber || ""} readOnly />
-              </div>
-            </div>
-          )}
-
-          {/* Status */}
-          <div>
-            <Label htmlFor="status">Estado</Label>
-            <Select
-              value={currentShipment.status}
-              onValueChange={(value) =>
-                isEditing &&
-                setEditedShipment((prev) => ({
-                  ...prev!,
-                  status: value as "pending" | "sent",
-                }))
-              }
-              disabled={!isEditing}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Pendiente</SelectItem>
-                <SelectItem value="sent">Enviado</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Delivery Note */}
-          <div>
-            <Label htmlFor="deliveryNote">Nota de Entrega</Label>
-            <Input
-              id="deliveryNote"
-              value={currentShipment.deliveryNote || ""}
-              onChange={(e) =>
-                isEditing &&
-                setEditedShipment((prev) => ({
-                  ...prev!,
-                  deliveryNote: e.target.value,
-                }))
-              }
-              readOnly={!isEditing}
-            />
-          </div>
-
-          {/* Special Handling */}
-          <div className="space-y-4">
-            <Label>Manejo Especial</Label>
-            <div className="flex flex-wrap gap-4">
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="isFragile"
-                  checked={currentShipment.isFragile || false}
-                  onCheckedChange={(checked) =>
-                    isEditing &&
-                    setEditedShipment((prev) => ({
-                      ...prev!,
-                      isFragile: !!checked,
-                    }))
-                  }
-                  disabled={!isEditing}
-                />
-                <Label htmlFor="isFragile">Frágil</Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="isUrgent"
-                  checked={currentShipment.isUrgent || false}
-                  onCheckedChange={(checked) =>
-                    isEditing &&
-                    setEditedShipment((prev) => ({
-                      ...prev!,
-                      isUrgent: !!checked,
-                    }))
-                  }
-                  disabled={!isEditing}
-                />
-                <Label htmlFor="isUrgent">Urgente</Label>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="hasColdChain"
-                  checked={currentShipment.hasColdChain || false}
-                  onCheckedChange={(checked) =>
-                    isEditing &&
-                    setEditedShipment((prev) => ({
-                      ...prev!,
-                      hasColdChain: !!checked,
-                    }))
-                  }
-                  disabled={!isEditing}
-                />
-                <Label htmlFor="hasColdChain">Cadena de Frío</Label>
+                <Label>Número de Remito</Label>
+                {isEditing ? (
+                  <Input
+                    value={editData.remitNumber}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, remitNumber: e.target.value }))}
+                    placeholder="Ej: 001-001-00001234"
+                  />
+                ) : (
+                  <p className="text-gray-900">{shipment.remitNumber || "No especificado"}</p>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Notes */}
-          <div>
-            <Label htmlFor="notes">Observaciones</Label>
-            <Textarea
-              id="notes"
-              value={currentShipment.notes || ""}
-              onChange={(e) =>
-                isEditing &&
-                setEditedShipment((prev) => ({
-                  ...prev!,
-                  notes: e.target.value,
-                }))
-              }
-              readOnly={!isEditing}
-              rows={3}
-            />
-          </div>
+          {/* Características especiales */}
+          <div className="border-t pt-6">
+            <div className="text-lg font-semibold mb-4">Características Especiales</div>
 
-          {/* Attachments */}
-          {currentShipment.attachments && currentShipment.attachments.length > 0 && (
-            <div>
-              <Label>Archivos Adjuntos</Label>
-              <div className="space-y-2 mt-2">
-                {currentShipment.attachments.map((attachment, index) => (
-                  <div key={index} className="flex items-center justify-between p-2 border rounded">
-                    <span className="text-sm">{attachment.split("/").pop()}</span>
-                    <div className="flex space-x-2">
-                      <Button variant="outline" size="sm" onClick={() => window.open(attachment, "_blank")}>
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Ver
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const link = document.createElement("a")
-                          link.href = attachment
-                          link.download = attachment.split("/").pop() || "archivo"
-                          link.click()
-                        }}
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Descargar
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter className="flex justify-between">
-          <div className="flex space-x-2">
-            {showPrintButton && (
-              <Button variant="outline" onClick={handlePrintLabels}>
-                <Printer className="mr-2 h-4 w-4" />
-                Imprimir Etiquetas ({getTotalLabels()})
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              onClick={handleSendEmail}
-              disabled={isSendingEmail || !currentShipment.clientEmail}
-            >
-              {isSendingEmail ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Enviando...
-                </>
-              ) : (
-                <>
-                  <Mail className="mr-2 h-4 w-4" />
-                  Enviar Email
-                </>
-              )}
-            </Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-              {isDeleting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Eliminando...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Eliminar
-                </>
-              )}
-            </Button>
-          </div>
-          <div className="flex space-x-2">
             {isEditing ? (
-              <>
-                <Button variant="outline" onClick={handleCancelEdit}>
-                  Cancelar
-                </Button>
-                <Button onClick={handleSave} disabled={isLoading}>
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Guardando...
-                    </>
-                  ) : (
-                    "Guardar Cambios"
-                  )}
-                </Button>
-              </>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="edit-isFragile"
+                    checked={editData.isFragile}
+                    onCheckedChange={(checked) => setEditData((prev) => ({ ...prev, isFragile: checked as boolean }))}
+                  />
+                  <Label htmlFor="edit-isFragile">Frágil</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="edit-isUrgent"
+                    checked={editData.isUrgent}
+                    onCheckedChange={(checked) => setEditData((prev) => ({ ...prev, isUrgent: checked as boolean }))}
+                  />
+                  <Label htmlFor="edit-isUrgent">Urgente</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="edit-hasColdChain"
+                    checked={editData.hasColdChain}
+                    onCheckedChange={(checked) =>
+                      setEditData((prev) => ({ ...prev, hasColdChain: checked as boolean }))
+                    }
+                  />
+                  <Label htmlFor="edit-hasColdChain">Cadena de Frío</Label>
+                </div>
+              </div>
             ) : (
-              <Button onClick={handleEdit}>Editar</Button>
+              <div className="flex flex-wrap gap-2">
+                {shipment.isFragile && <Badge className="bg-red-100 text-red-800">Frágil</Badge>}
+                {shipment.isUrgent && <Badge className="bg-yellow-100 text-yellow-800">Urgente</Badge>}
+                {shipment.hasColdChain && <Badge className="bg-blue-100 text-blue-800">Cadena de Frío</Badge>}
+                {!shipment.isFragile && !shipment.isUrgent && !shipment.hasColdChain && (
+                  <span className="text-gray-500">Ninguna característica especial</span>
+                )}
+              </div>
             )}
           </div>
-        </DialogFooter>
+
+          {/* Estado */}
+          {isEditing && (
+            <div className="border-t pt-6">
+              <Label>Estado</Label>
+              <Select
+                value={editData.status}
+                onValueChange={(value: "pending" | "sent" | "delivered") =>
+                  setEditData((prev) => ({ ...prev, status: value }))
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pendiente</SelectItem>
+                  <SelectItem value="sent">Enviado</SelectItem>
+                  <SelectItem value="delivered">Entregado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Observaciones */}
+          <div className="border-t pt-6">
+            <div className="text-lg font-semibold mb-4">Observaciones</div>
+
+            <div className="space-y-4">
+              <div>
+                <Label>Notas Generales</Label>
+                {isEditing ? (
+                  <Textarea
+                    value={editData.notes}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Observaciones adicionales"
+                    rows={3}
+                  />
+                ) : (
+                  <p className="text-gray-700">{shipment.notes || "Sin observaciones"}</p>
+                )}
+              </div>
+
+              <div>
+                <Label>Nota de Entrega</Label>
+                {isEditing ? (
+                  <Textarea
+                    value={editData.deliveryNote}
+                    onChange={(e) => setEditData((prev) => ({ ...prev, deliveryNote: e.target.value }))}
+                    placeholder="Instrucciones especiales para la entrega"
+                    rows={3}
+                  />
+                ) : (
+                  <p className="text-gray-700">{shipment.deliveryNote || "Sin instrucciones especiales"}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Botones de acción */}
+          <div className="border-t pt-6">
+            <div className="flex flex-wrap gap-2 justify-end">
+              {isEditing ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setIsEditing(false)
+                      setEditData({
+                        client: shipment.client,
+                        clientAddress: shipment.clientAddress || "",
+                        transport: shipment.transport,
+                        packages: shipment.packages || 0,
+                        pallets: shipment.pallets || 0,
+                        weight: shipment.weight || 0,
+                        declaredValue: shipment.declaredValue || 0,
+                        invoiceNumber: shipment.invoiceNumber || "",
+                        remitNumber: shipment.remitNumber || "",
+                        notes: shipment.notes || "",
+                        deliveryNote: shipment.deliveryNote || "",
+                        isFragile: shipment.isFragile || false,
+                        isUrgent: shipment.isUrgent || false,
+                        hasColdChain: shipment.hasColdChain || false,
+                        status: shipment.status,
+                      })
+                    }}
+                    disabled={loading}
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancelar
+                  </Button>
+                  <Button onClick={handleSave} disabled={loading}>
+                    <Save className="h-4 w-4 mr-2" />
+                    {loading ? "Guardando..." : "Guardar"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="outline" onClick={() => setIsEditing(true)} disabled={loading}>
+                    <Edit className="h-4 w-4 mr-2" />
+                    Editar
+                  </Button>
+                  <Button variant="outline" onClick={handlePrintLabel} disabled={loading}>
+                    <Printer className="h-4 w-4 mr-2" />
+                    Imprimir Etiqueta
+                  </Button>
+                  <Button variant="outline" onClick={handleSendEmail} disabled={emailLoading}>
+                    <Mail className="h-4 w-4 mr-2" />
+                    {emailLoading ? "Enviando..." : "Enviar Email"}
+                  </Button>
+                  <Button variant="destructive" onClick={handleDelete} disabled={loading}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Eliminar
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   )

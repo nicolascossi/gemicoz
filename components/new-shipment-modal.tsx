@@ -2,836 +2,388 @@
 
 import type React from "react"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Loader2, Paperclip, AlertCircle } from "lucide-react"
-import type { Shipment, Client, Transport, ClientAddress } from "@/lib/types"
+import { Checkbox } from "@/components/ui/checkbox"
+import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
-import { ref, push, set, get } from "firebase/database"
-import { generateShipmentNumber, getNextShipmentNumber } from "@/lib/shipment-utils"
+import { toast } from "@/components/ui/use-toast"
+import { generateShipmentNumber } from "@/lib/shipment-utils"
 
 interface NewShipmentModalProps {
   isOpen: boolean
   onClose: () => void
-  onClientUpdate: (clients: Client[]) => void
-  onTransportUpdate: (transports: Transport[]) => void
-  clients: Client[]
-  transports: Transport[]
-  onShipmentCreate?: (newShipment: Shipment) => void
+  onShipmentCreated: () => void
 }
 
-export default function NewShipmentModal({
-  isOpen,
-  onClose,
-  clients,
-  transports,
-  onClientUpdate,
-  onTransportUpdate,
-  onShipmentCreate,
-}: NewShipmentModalProps) {
-  const [shipment, setShipment] = useState<Partial<Shipment>>({
-    status: "pending",
-    date: new Date().toISOString().split("T")[0],
+interface Client {
+  id: string
+  name: string
+  address: string
+  phone: string
+  email: string
+}
+
+interface Transport {
+  id: string
+  name: string
+  contact: string
+  phone: string
+}
+
+export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }: NewShipmentModalProps) {
+  const [loading, setLoading] = useState(false)
+  const [clients, setClients] = useState<Client[]>([])
+  const [transports, setTransports] = useState<Transport[]>([])
+
+  const [formData, setFormData] = useState({
+    client: "",
+    clientAddress: "",
+    transport: "",
     packages: 0,
     pallets: 0,
-    invoiceNumber: "",
-    remitNumber: "",
-    deliveryNote: "",
-    notes: "",
-    hasColdChain: false,
-    isUrgent: false,
-    isFragile: false,
     weight: 0,
     declaredValue: 0,
-    shippingCost: 0,
-  })
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
-  const [selectedAddress, setSelectedAddress] = useState<ClientAddress | null>(null)
-
-  const [remitType, setRemitType] = useState<"R" | "X" | "RM">("R")
-  const [remitNumber, setRemitNumber] = useState("")
-  const [invoiceType, setInvoiceType] = useState<"A" | "B" | "E">("A")
-  const [invoiceNumber, setInvoiceNumber] = useState("")
-  const [files, setFiles] = useState<File[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const sortedTransports = [...transports].sort((a, b) => {
-    const nameA = a.name || ""
-    const nameB = b.name || ""
-    return nameA.localeCompare(nameB)
+    invoiceNumber: "",
+    remitNumber: "",
+    notes: "",
+    deliveryNote: "",
+    isFragile: false,
+    isUrgent: false,
+    hasColdChain: false,
+    status: "pending" as "pending" | "sent" | "delivered",
   })
 
   useEffect(() => {
     if (isOpen) {
-      setError(null)
-      setFiles([])
-      setRemitType("R")
-      setRemitNumber("")
-      setSelectedClient(null)
-      setSelectedAddress(null)
+      fetchClients()
+      fetchTransports()
+    }
+  }, [isOpen])
 
-      getNextShipmentNumber().then((number) => {
-        setShipment((prev) => ({ ...prev, shipmentNumber: number }))
+  const fetchClients = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, "clients"))
+      const clientsData: Client[] = []
+      querySnapshot.forEach((doc) => {
+        clientsData.push({ id: doc.id, ...doc.data() } as Client)
       })
-    }
-  }, [isOpen])
-
-  useEffect(() => {
-    if (isOpen) {
-      loadData()
-    }
-  }, [isOpen])
-
-  useEffect(() => {
-    if (remitNumber) {
-      if (remitType === "R") {
-        setShipment((prev) => ({
-          ...prev,
-          remitNumber: `${remitType} - 00006 - ${remitNumber}`,
-        }))
-      } else if (remitType === "X") {
-        setShipment((prev) => ({
-          ...prev,
-          remitNumber: `${remitType} - R00001 - ${remitNumber}`,
-        }))
-      } else if (remitType === "RM") {
-        setShipment((prev) => ({
-          ...prev,
-          remitNumber: `${remitType} - ${remitNumber}`,
-        }))
-      }
-    } else {
-      setShipment((prev) => ({
-        ...prev,
-        remitNumber: "",
-      }))
-    }
-  }, [remitType, remitNumber])
-
-  useEffect(() => {
-    if (invoiceNumber) {
-      let prefix = ""
-      if (invoiceType === "A") {
-        prefix = "A 00001-"
-      } else if (invoiceType === "B") {
-        prefix = "B 00001-"
-      } else if (invoiceType === "E") {
-        prefix = "E 00004-"
-      }
-
-      setShipment((prev) => ({
-        ...prev,
-        invoiceNumber: `${prefix}${invoiceNumber}`,
-      }))
-    } else {
-      setShipment((prev) => ({
-        ...prev,
-        invoiceNumber: "",
-      }))
-    }
-  }, [invoiceType, invoiceNumber])
-
-  const loadData = useCallback(async () => {
-    try {
-      const clientsData = clients
-      const transportsData = transports
-      onClientUpdate(clientsData)
-      onTransportUpdate(transportsData)
+      setClients(clientsData)
     } catch (error) {
-      console.error("Error loading clients and transports:", error)
-      setError("Error al cargar los datos de clientes y transportes")
-    }
-  }, [clients, onClientUpdate, onTransportUpdate, transports])
-
-  useEffect(() => {
-    console.log("Clientes en el modal:", clients)
-    console.log("Transportes en el modal:", transports)
-  }, [clients, transports])
-
-  const uploadFile = async (file: File): Promise<string> => {
-    const formData = new FormData()
-    formData.append("file", file)
-    formData.append("shipmentNumber", shipment.shipmentNumber || "")
-
-    const response = await fetch("/api/upload", {
-      method: "POST",
-      body: formData,
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.error || "Error al cargar el archivo")
-    }
-
-    const data = await response.json()
-    return data.url
-  }
-
-  const adjustDate = (dateString) => {
-    try {
-      if (!dateString) return new Date().toISOString()
-
-      const [year, month, day] = dateString.split("-").map(Number)
-
-      if (isNaN(year) || isNaN(month) || isNaN(day) || year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) {
-        console.error("Invalid date components:", { year, month, day })
-        return new Date().toISOString()
-      }
-
-      return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toISOString()
-    } catch (error) {
-      console.error("Error adjusting date:", error)
-      return new Date().toISOString()
+      console.error("Error fetching clients:", error)
     }
   }
 
-  const handleSelectKeyDown = (
-    e: React.KeyboardEvent,
-    options: any[],
-    currentValue: any,
-    onChange: (value: any) => void,
-  ) => {
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      e.preventDefault()
-      e.stopPropagation()
-
-      const currentIndex = options.findIndex(
-        (option) =>
-          option.value === currentValue ||
-          option.id === currentValue ||
-          option.name === currentValue ||
-          option === currentValue,
-      )
-
-      let newIndex
-      if (e.key === "ArrowUp") {
-        newIndex = currentIndex > 0 ? currentIndex - 1 : options.length - 1
-      } else {
-        newIndex = currentIndex < options.length - 1 ? currentIndex + 1 : 0
-      }
-
-      const newValue = options[newIndex]
-      if (newValue) {
-        if (newValue.value) onChange(newValue.value)
-        else if (newValue.id) onChange(newValue.id)
-        else if (newValue.name) onChange(newValue.name)
-        else onChange(newValue)
-      }
+  const fetchTransports = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, "transports"))
+      const transportsData: Transport[] = []
+      querySnapshot.forEach((doc) => {
+        transportsData.push({ id: doc.id, ...doc.data() } as Transport)
+      })
+      setTransports(transportsData)
+    } catch (error) {
+      console.error("Error fetching transports:", error)
     }
+  }
+
+  const handleClientChange = (clientName: string) => {
+    const selectedClient = clients.find((c) => c.name === clientName)
+    setFormData((prev) => ({
+      ...prev,
+      client: clientName,
+      clientAddress: selectedClient?.address || "",
+    }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setIsLoading(true)
-    setError(null)
 
-    if (!shipment.clientCode) {
-      setError("Por favor ingrese un código de cliente")
-      setIsLoading(false)
+    if (!formData.client || !formData.transport) {
+      toast({
+        title: "Error",
+        description: "Cliente y transporte son obligatorios",
+        variant: "destructive",
+      })
       return
     }
 
-    if (!shipment.transport) {
-      setError("Por favor seleccione un transporte")
-      setIsLoading(false)
+    if (formData.packages === 0 && formData.pallets === 0) {
+      toast({
+        title: "Error",
+        description: "Debe especificar al menos 1 bulto o 1 pallet",
+        variant: "destructive",
+      })
       return
     }
+
+    setLoading(true)
 
     try {
-      console.log("Creando nuevo envío...")
-      const newShipmentRef = push(ref(db, "shipments"))
       const shipmentNumber = await generateShipmentNumber()
-      const fileUrls = await Promise.all(files.map(uploadFile))
 
-      const newShipment = {
-        ...shipment,
-        id: newShipmentRef.key,
+      const shipmentData = {
+        ...formData,
         shipmentNumber,
-        client: selectedClient.businessName,
-        clientEmail: selectedClient.email || "",
-        clientPhone: selectedClient.phone || "",
-        clientAddress: selectedAddress
-          ? `${selectedAddress.street}${selectedAddress.city ? `, ${selectedAddress.city}` : ""}${
-              selectedAddress.title ? ` [${selectedAddress.title}]` : ""
-            }`
-          : "",
-        clientAddressId: selectedAddress?.id || "",
-        clientAddressTitle: selectedAddress?.title || "",
-        date: adjustDate(shipment.date || new Date().toISOString().split("T")[0]),
-        attachments: fileUrls,
-        createdAt: new Date().toISOString(),
-        pallets: shipment.pallets || 0,
+        date: Timestamp.fromDate(new Date()),
+        createdAt: Timestamp.fromDate(new Date()),
+        updatedAt: Timestamp.fromDate(new Date()),
       }
 
-      console.log("Guardando envío en Firebase:", newShipment)
-      await set(newShipmentRef, newShipment)
-      console.log("Envío guardado en Firebase con ID:", newShipmentRef.key)
+      await addDoc(collection(db, "shipments"), shipmentData)
 
-      if (newShipment.status === "sent") {
-        if (!newShipment.clientEmail) {
-          console.log("Client has no email, skipping email notification")
+      toast({
+        title: "Éxito",
+        description: `Envío ${shipmentNumber} creado correctamente`,
+      })
 
-          if (onShipmentCreate) {
-            console.log("Notificando al componente padre sobre el nuevo envío")
-            onShipmentCreate(newShipment as Shipment)
-          }
+      onShipmentCreated()
+      onClose()
 
-          setIsLoading(false)
-          return
-        }
-
-        try {
-          console.log("Enviando correo de notificación para envío nuevo con estado 'sent'")
-          const response = await fetch("/api/send-email", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(newShipment),
-          })
-
-          const data = await response.json()
-          if (!response.ok) {
-            console.error("Error al enviar correo:", data)
-            setError(
-              `El envío se creó correctamente, pero hubo un problema al enviar el correo: ${data.error || "Error desconocido"}`,
-            )
-
-            if (onShipmentCreate) {
-              console.log("Notificando al componente padre sobre el nuevo envío (con error de correo)")
-              onShipmentCreate(newShipment as Shipment)
-            }
-
-            setIsLoading(false)
-            return
-          }
-
-          console.log("Correo enviado correctamente:", data)
-        } catch (emailError) {
-          console.error("Error al enviar correo:", emailError)
-          setError(`El envío se creó correctamente, pero hubo un problema al enviar el correo: ${emailError.message}`)
-
-          if (onShipmentCreate) {
-            console.log("Notificando al componente padre sobre el nuevo envío (con error de correo)")
-            onShipmentCreate(newShipment as Shipment)
-          }
-
-          setIsLoading(false)
-          return
-        }
-      }
-
-      const shipmentRef = ref(db, `shipments/${newShipmentRef.key}`)
-      const shipmentSnapshot = await get(shipmentRef)
-
-      if (shipmentSnapshot.exists()) {
-        const completeShipment = {
-          id: newShipmentRef.key,
-          ...shipmentSnapshot.val(),
-        }
-
-        if (onShipmentCreate) {
-          console.log("Notificando al componente padre sobre el nuevo envío completo:", completeShipment)
-          onShipmentCreate(completeShipment as Shipment)
-        }
-      } else {
-        if (onShipmentCreate) {
-          console.log("Notificando al componente padre sobre el nuevo envío (sin datos completos)")
-          onShipmentCreate(newShipment as Shipment)
-        }
-      }
-
-      setIsLoading(false)
+      // Reset form
+      setFormData({
+        client: "",
+        clientAddress: "",
+        transport: "",
+        packages: 0,
+        pallets: 0,
+        weight: 0,
+        declaredValue: 0,
+        invoiceNumber: "",
+        remitNumber: "",
+        notes: "",
+        deliveryNote: "",
+        isFragile: false,
+        isUrgent: false,
+        hasColdChain: false,
+        status: "pending",
+      })
     } catch (error) {
-      console.error("Error al crear el envío:", error)
-      setError(error instanceof Error ? error.message : "Error al crear el envío")
-      setIsLoading(false)
-    }
-  }
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const selectedFiles = Array.from(e.target.files)
-
-      const maxSize = 5 * 1024 * 1024
-      const invalidFiles = selectedFiles.filter((file) => file.size > maxSize)
-
-      if (invalidFiles.length > 0) {
-        setError("Algunos archivos exceden el tamaño máximo permitido de 5MB")
-        return
-      }
-
-      setFiles(selectedFiles)
-      setError(null)
-    }
-  }
-
-  const handleClientChange = (clientId: string) => {
-    const selectedClient = clients.find((c) => c.id === clientId)
-    if (selectedClient) {
-      setSelectedClient(selectedClient)
-      setSelectedAddress(null)
-
-      if (selectedClient.addresses && selectedClient.addresses.length === 1) {
-        setSelectedAddress(selectedClient.addresses[0])
-      } else if (selectedClient.addresses && selectedClient.addresses.length > 0) {
-        const defaultAddress = selectedClient.addresses.find((addr) => addr.isDefault)
-        if (defaultAddress) {
-          setSelectedAddress(defaultAddress)
-        }
-      }
-
-      setShipment((prev) => ({
-        ...prev,
-        clientCode: selectedClient.clientCode,
-      }))
-    }
-  }
-
-  const handleAddressChange = (addressId: string) => {
-    if (!selectedClient || !selectedClient.addresses) return
-
-    const selectedAddress = selectedClient.addresses.find((addr) => addr.id === addressId)
-    if (selectedAddress) {
-      setSelectedAddress(selectedAddress)
-    }
-  }
-
-  const handleTransportChange = (transportName: string) => {
-    const selectedTransport = transports.find((t) => t.name === transportName)
-    if (selectedTransport) {
-      setShipment((prev) => ({
-        ...prev,
-        transport: transportName,
-        transportEmail: selectedTransport.email,
-        transportPhone: selectedTransport.phone,
-      }))
+      console.error("Error creating shipment:", error)
+      toast({
+        title: "Error",
+        description: "Error al crear el envío",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Nuevo Envío</DialogTitle>
-          <DialogDescription>
-            Ingrese los detalles del nuevo envío. Asegúrese de completar todos los campos requeridos.
-          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
 
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="shipmentNumber" className="text-right">
-                Número de Envío
-              </Label>
-              <Input id="shipmentNumber" value={shipment.shipmentNumber || ""} readOnly className="col-span-3" />
-            </div>
-
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="clientCode" className="text-right">
-                Código de Cliente
-              </Label>
-              <div className="col-span-3">
-                <Input
-                  id="clientCode"
-                  placeholder="Ingrese el código de cliente"
-                  value={shipment.clientCode || ""}
-                  onChange={(e) => {
-                    const code = e.target.value
-                    setShipment({ ...shipment, clientCode: code })
-
-                    const foundClient = clients.find((c) => c.clientCode === code)
-                    if (foundClient) {
-                      setSelectedClient(foundClient)
-
-                      if (foundClient.addresses && foundClient.addresses.length === 1) {
-                        setSelectedAddress(foundClient.addresses[0])
-                      } else if (foundClient.addresses && foundClient.addresses.length > 0) {
-                        const defaultAddress = foundClient.addresses.find((addr) => addr.isDefault)
-                        if (defaultAddress) {
-                          setSelectedAddress(defaultAddress)
-                        } else {
-                          setSelectedAddress(null)
-                        }
-                      }
-                    } else {
-                      setSelectedClient(null)
-                      setSelectedAddress(null)
-                    }
-                  }}
-                  disabled={selectedClient !== null}
-                />
-                {selectedClient && <div className="mt-1 text-base font-medium">{selectedClient.businessName}</div>}
-              </div>
-            </div>
-
-            {selectedClient && selectedClient.addresses && selectedClient.addresses.length > 0 && (
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="address" className="text-right">
-                  Dirección
-                </Label>
-                <div className="col-span-3">
-                  <Select
-                    onValueChange={handleAddressChange}
-                    value={selectedAddress?.id}
-                    disabled={selectedClient.addresses.length === 0}
-                  >
-                    <SelectTrigger
-                      onKeyDown={(e) =>
-                        handleSelectKeyDown(e, selectedClient.addresses || [], selectedAddress?.id, handleAddressChange)
-                      }
-                    >
-                      <SelectValue placeholder="Seleccionar dirección" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {selectedClient.addresses.length > 0 ? (
-                        selectedClient.addresses.map((address) => (
-                          <SelectItem key={address.id} value={address.id}>
-                            {address.street}
-                            {address.city ? `, ${address.city}` : ""}
-                            {address.title ? ` [${address.title.toUpperCase()}]` : ""}
-                            {address.isDefault ? " [Predeterminada]" : ""}
-                          </SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="no-addresses" disabled>
-                          No hay direcciones registradas
-                        </SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                  {selectedAddress && (
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {selectedAddress.street}
-                      {selectedAddress.city ? `, ${selectedAddress.city}` : ""}
-                      {selectedAddress.title ? ` [${selectedAddress.title.toUpperCase()}]` : ""}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="transport" className="text-right">
-                Transporte
-              </Label>
-              <Select onValueChange={handleTransportChange} value={shipment.transport}>
-                <SelectTrigger
-                  className="col-span-3"
-                  onKeyDown={(e) => handleSelectKeyDown(e, sortedTransports, shipment.transport, handleTransportChange)}
-                >
-                  <SelectValue placeholder="Seleccionar transporte" />
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="client">Cliente *</Label>
+              <Select value={formData.client} onValueChange={handleClientChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Seleccionar cliente" />
                 </SelectTrigger>
                 <SelectContent>
-                  {sortedTransports.length > 0 ? (
-                    sortedTransports.map((transport) => (
-                      <SelectItem key={transport.id} value={transport.name || `transport-${transport.id}`}>
-                        {transport.name || "Transporte sin nombre"}
-                      </SelectItem>
-                    ))
-                  ) : (
-                    <SelectItem value="no-transports">No hay transportes disponibles</SelectItem>
-                  )}
+                  {clients.map((client) => (
+                    <SelectItem key={client.id} value={client.name}>
+                      {client.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="date" className="text-right">
-                Fecha de Despacho
-              </Label>
-              <Input
-                id="date"
-                type="date"
-                value={shipment.date}
-                onChange={(e) => setShipment({ ...shipment, date: e.target.value })}
-                className="col-span-3"
-              />
+
+            <div>
+              <Label htmlFor="transport">Transporte *</Label>
+              <Select
+                value={formData.transport}
+                onValueChange={(value) => setFormData((prev) => ({ ...prev, transport: value }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Seleccionar transporte" />
+                </SelectTrigger>
+                <SelectContent>
+                  {transports.map((transport) => (
+                    <SelectItem key={transport.id} value={transport.name}>
+                      {transport.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="packages" className="text-right">
-                Cantidad de Bultos
-              </Label>
+          </div>
+
+          <div>
+            <Label htmlFor="clientAddress">Dirección del Cliente</Label>
+            <Textarea
+              id="clientAddress"
+              value={formData.clientAddress}
+              onChange={(e) => setFormData((prev) => ({ ...prev, clientAddress: e.target.value }))}
+              placeholder="Dirección de entrega"
+              rows={2}
+            />
+          </div>
+
+          <div className="grid grid-cols-4 gap-4">
+            <div>
+              <Label htmlFor="packages">Bultos</Label>
               <Input
                 id="packages"
                 type="number"
                 min="0"
-                value={shipment.packages}
-                onChange={(e) => setShipment({ ...shipment, packages: Number.parseInt(e.target.value) })}
-                className="col-span-3"
+                value={formData.packages}
+                onChange={(e) => setFormData((prev) => ({ ...prev, packages: Number.parseInt(e.target.value) || 0 }))}
               />
             </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="pallets" className="text-right">
-                Cantidad de Pallets
-              </Label>
+
+            <div>
+              <Label htmlFor="pallets">Pallets</Label>
               <Input
                 id="pallets"
                 type="number"
                 min="0"
-                value={shipment.pallets}
-                onChange={(e) => setShipment({ ...shipment, pallets: Number.parseInt(e.target.value) })}
-                className="col-span-3"
+                value={formData.pallets}
+                onChange={(e) => setFormData((prev) => ({ ...prev, pallets: Number.parseInt(e.target.value) || 0 }))}
               />
             </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="weight" className="text-right">
-                Peso (kg)
-              </Label>
+
+            <div>
+              <Label htmlFor="weight">Peso (kg)</Label>
               <Input
                 id="weight"
                 type="number"
-                min="0"
                 step="0.01"
-                value={shipment.weight}
-                onChange={(e) => setShipment({ ...shipment, weight: Number.parseFloat(e.target.value) })}
-                className="col-span-3"
+                min="0"
+                value={formData.weight}
+                onChange={(e) => setFormData((prev) => ({ ...prev, weight: Number.parseFloat(e.target.value) || 0 }))}
               />
             </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="declaredValue" className="text-right">
-                Valor Declarado ($)
-              </Label>
+
+            <div>
+              <Label htmlFor="declaredValue">Valor Declarado ($)</Label>
               <Input
                 id="declaredValue"
                 type="number"
-                min="0"
                 step="0.01"
-                value={shipment.declaredValue}
-                onChange={(e) => setShipment({ ...shipment, declaredValue: Number.parseFloat(e.target.value) })}
-                className="col-span-3"
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="shippingCost" className="text-right">
-                Costo de Envío ($)
-              </Label>
-              <Input
-                id="shippingCost"
-                type="number"
                 min="0"
-                step="0.01"
-                value={shipment.shippingCost}
-                onChange={(e) => setShipment({ ...shipment, shippingCost: Number.parseFloat(e.target.value) })}
-                className="col-span-3"
+                value={formData.declaredValue}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, declaredValue: Number.parseFloat(e.target.value) || 0 }))
+                }
               />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="status" className="text-right">
-                Estado
-              </Label>
-              <Select
-                value={shipment.status}
-                onValueChange={(value) => setShipment({ ...shipment, status: value as "pending" | "sent" })}
-              >
-                <SelectTrigger
-                  className="col-span-3"
-                  onKeyDown={(e) =>
-                    handleSelectKeyDown(
-                      e,
-                      [
-                        { value: "pending", label: "Pendiente" },
-                        { value: "sent", label: "Enviado" },
-                      ],
-                      shipment.status,
-                      (value) => setShipment({ ...shipment, status: value as "pending" | "sent" }),
-                    )
-                  }
-                >
-                  <SelectValue placeholder="Seleccione el estado" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pending">Pendiente</SelectItem>
-                  <SelectItem value="sent">Enviado</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="deliveryNote" className="text-right">
-                Nota de Entrega
-              </Label>
-              <Input
-                id="deliveryNote"
-                placeholder="Ingrese el número de nota de entrega"
-                value={shipment.deliveryNote || ""}
-                onChange={(e) => setShipment({ ...shipment, deliveryNote: e.target.value })}
-                className="col-span-3"
-              />
-            </div>
-
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="files" className="text-right">
-                Adjuntar archivos
-              </Label>
-              <div className="col-span-3">
-                <Input
-                  id="files"
-                  type="file"
-                  multiple
-                  onChange={handleFileChange}
-                  className="hidden"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
-                />
-                <Label
-                  htmlFor="files"
-                  className="cursor-pointer flex items-center justify-center w-full p-2 border border-dashed rounded-md"
-                >
-                  <Paperclip className="mr-2" />
-                  {files.length > 0
-                    ? `${files.length} archivo(s) seleccionado(s)`
-                    : "Seleccionar archivos (máx. 5MB por archivo)"}
-                </Label>
-                {files.length > 0 && (
-                  <div className="mt-2 text-sm text-muted-foreground">
-                    {files.map((file, index) => (
-                      <div key={index} className="flex items-center gap-2">
-                        <span>{file.name}</span>
-                        <span>({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="invoiceNumber">Número de Factura</Label>
-              <div className="flex gap-2">
-                <Select value={invoiceType} onValueChange={(value) => setInvoiceType(value as "A" | "B" | "E")}>
-                  <SelectTrigger
-                    className="w-20"
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, [{ value: "A" }, { value: "B" }, { value: "E" }], invoiceType, (value) =>
-                        setInvoiceType(value as "A" | "B" | "E"),
-                      )
-                    }
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="A">A</SelectItem>
-                    <SelectItem value="B">B</SelectItem>
-                    <SelectItem value="E">E</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  id="invoiceNumber"
-                  placeholder="Número"
-                  value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
-                  className="flex-1"
-                />
-              </div>
-              {shipment.invoiceNumber && (
-                <p className="text-sm text-muted-foreground mt-1">Formato guardado: {shipment.invoiceNumber}</p>
-              )}
+              <Input
+                id="invoiceNumber"
+                value={formData.invoiceNumber}
+                onChange={(e) => setFormData((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                placeholder="Ej: 001-001-00001234"
+              />
             </div>
-            <div className="space-y-2">
+
+            <div>
               <Label htmlFor="remitNumber">Número de Remito</Label>
-              <div className="flex gap-2">
-                <Select value={remitType} onValueChange={(value) => setRemitType(value as "R" | "X" | "RM")}>
-                  <SelectTrigger
-                    className="w-20"
-                    onKeyDown={(e) =>
-                      handleSelectKeyDown(e, [{ value: "R" }, { value: "X" }, { value: "RM" }], remitType, (value) =>
-                        setRemitType(value as "R" | "X" | "RM"),
-                      )
-                    }
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="R">R</SelectItem>
-                    <SelectItem value="X">X</SelectItem>
-                    <SelectItem value="RM">RM</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  id="remitNumber"
-                  placeholder="Número"
-                  value={remitNumber}
-                  onChange={(e) => setRemitNumber(e.target.value)}
-                  className="flex-1"
-                />
-              </div>
-              {shipment.remitNumber && (
-                <p className="text-sm text-muted-foreground mt-1">Formato guardado: {shipment.remitNumber}</p>
-              )}
+              <Input
+                id="remitNumber"
+                value={formData.remitNumber}
+                onChange={(e) => setFormData((prev) => ({ ...prev, remitNumber: e.target.value }))}
+                placeholder="Ej: 001-001-00001234"
+              />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="notes">Aclaraciones</Label>
+          <div>
+            <Label htmlFor="notes">Observaciones</Label>
             <Textarea
               id="notes"
-              value={shipment.notes}
-              onChange={(e) => setShipment({ ...shipment, notes: e.target.value })}
+              value={formData.notes}
+              onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
+              placeholder="Observaciones adicionales"
+              rows={2}
             />
           </div>
 
-          <div className="flex space-x-4 mt-4">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="hasColdChain"
-                checked={shipment.hasColdChain}
-                onCheckedChange={(checked) => setShipment({ ...shipment, hasColdChain: checked as boolean })}
-              />
-              <Label htmlFor="hasColdChain">Cadena de Frío</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="isUrgent"
-                checked={shipment.isUrgent}
-                onCheckedChange={(checked) => setShipment({ ...shipment, isUrgent: checked as boolean })}
-              />
-              <Label htmlFor="isUrgent">Urgente</Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="isFragile"
-                checked={shipment.isFragile}
-                onCheckedChange={(checked) => setShipment({ ...shipment, isFragile: checked as boolean })}
-              />
-              <Label htmlFor="isFragile">Muy Frágil</Label>
+          <div>
+            <Label htmlFor="deliveryNote">Nota de Entrega</Label>
+            <Textarea
+              id="deliveryNote"
+              value={formData.deliveryNote}
+              onChange={(e) => setFormData((prev) => ({ ...prev, deliveryNote: e.target.value }))}
+              placeholder="Instrucciones especiales para la entrega"
+              rows={2}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Características Especiales</Label>
+            <div className="flex flex-wrap gap-4">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="isFragile"
+                  checked={formData.isFragile}
+                  onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, isFragile: checked as boolean }))}
+                />
+                <Label htmlFor="isFragile">Frágil</Label>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="isUrgent"
+                  checked={formData.isUrgent}
+                  onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, isUrgent: checked as boolean }))}
+                />
+                <Label htmlFor="isUrgent">Urgente</Label>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="hasColdChain"
+                  checked={formData.hasColdChain}
+                  onCheckedChange={(checked) => setFormData((prev) => ({ ...prev, hasColdChain: checked as boolean }))}
+                />
+                <Label htmlFor="hasColdChain">Cadena de Frío</Label>
+              </div>
             </div>
           </div>
 
-          <DialogFooter>
-            <Button type="submit" disabled={isLoading || !shipment.clientCode || !shipment.transport}>
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Guardando...
-                </>
-              ) : (
-                "Guardar Envío"
-              )}
+          <div>
+            <Label htmlFor="status">Estado</Label>
+            <Select
+              value={formData.status}
+              onValueChange={(value: "pending" | "sent" | "delivered") =>
+                setFormData((prev) => ({ ...prev, status: value }))
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pending">Pendiente</SelectItem>
+                <SelectItem value="sent">Enviado</SelectItem>
+                <SelectItem value="delivered">Entregado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex justify-end space-x-2 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancelar
             </Button>
-          </DialogFooter>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Creando..." : "Crear Envío"}
+            </Button>
+          </div>
         </form>
       </DialogContent>
     </Dialog>

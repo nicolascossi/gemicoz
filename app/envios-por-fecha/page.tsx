@@ -10,7 +10,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, FileDown, Search, Mail, Loader2, Calendar, CheckCircle2, X } from "lucide-react"
+import {
+  ArrowLeft,
+  FileDown,
+  Search,
+  Mail,
+  Loader2,
+  CheckCircle2,
+  X,
+  Package,
+  Truck,
+  MapPin,
+  FileText,
+  Eye,
+} from "lucide-react"
 import { format, isWithinInterval, parseISO, isValid } from "date-fns"
 import { es } from "date-fns/locale"
 import { ref, get, update, onValue, off } from "firebase/database"
@@ -24,6 +37,7 @@ import { debounce } from "lodash"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
 import XLSX from "xlsx"
+import { collection, query, where, orderBy, onSnapshot, Timestamp } from "firebase/firestore"
 
 // Extended shipment type with client code
 interface ExtendedShipment extends Shipment {
@@ -1114,6 +1128,78 @@ export default function EnviosPorFechaPage() {
     }
   }, [startDate, endDate])
 
+  const [selectedDate, setSelectedDate] = useState("")
+  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+
+  const fetchShipmentsByDate = async (date: string) => {
+    if (!date) return
+
+    setIsLoading(true)
+    try {
+      const startDateObj = new Date(date)
+      startDateObj.setHours(0, 0, 0, 0)
+
+      const endDateObj = new Date(date)
+      endDateObj.setHours(23, 59, 59, 999)
+
+      const q = query(
+        collection(db, "shipments"),
+        where("date", ">=", Timestamp.fromDate(startDateObj)),
+        where("date", "<=", Timestamp.fromDate(endDateObj)),
+        orderBy("date", "desc"),
+      )
+
+      const unsubscribe = onSnapshot(q, (querySnapshot) => {
+        const shipmentsData: ExtendedShipment[] = []
+        querySnapshot.forEach((doc) => {
+          const data = doc.data()
+          shipmentsData.push({
+            id: doc.id,
+            ...data,
+            date: data.date?.toDate?.() || new Date(data.date),
+          } as ExtendedShipment)
+        })
+        setShipments(shipmentsData)
+        setIsLoading(false)
+      })
+
+      return unsubscribe
+    } catch (error) {
+      console.error("Error fetching shipments:", error)
+      setIsLoading(false)
+    }
+  }
+
+  const handleDateChange = (date: string) => {
+    setSelectedDate(date)
+    setStartDate(date)
+    setEndDate(date)
+    if (date) {
+      fetchShipmentsByDate(date)
+    } else {
+      setShipments([])
+    }
+  }
+
+  const handleViewDetails = (shipment: Shipment) => {
+    setSelectedShipment(shipment)
+    setIsDetailModalOpen(true)
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "sent":
+        return <Badge className="bg-green-100 text-green-800">Enviado</Badge>
+      case "pending":
+        return <Badge className="bg-yellow-100 text-yellow-800">Pendiente</Badge>
+      case "delivered":
+        return <Badge className="bg-blue-100 text-blue-800">Entregado</Badge>
+      default:
+        return <Badge className="bg-gray-100 text-gray-800">Desconocido</Badge>
+    }
+  }
+
   return (
     <div className="w-full p-4 px-[100px] pt-[50px]">
       <div className="flex items-center justify-between mb-6">
@@ -1136,7 +1222,7 @@ export default function EnviosPorFechaPage() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
-            <div className="flex-1">
+            {/* <div className="flex-1">
               <Label htmlFor="startDate">Fecha Inicial</Label>
               <div className="relative">
                 <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1155,6 +1241,18 @@ export default function EnviosPorFechaPage() {
                 <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input id="endDate" type="date" value={endDate} onChange={handleEndDateChange} className="pl-8 mt-1" />
               </div>
+            </div> */}
+            <div className="flex-1 max-w-xs">
+              <Label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
+                Seleccionar Fecha
+              </Label>
+              <Input
+                id="date"
+                type="date"
+                value={selectedDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                className="w-full"
+              />
             </div>
             <div className="flex items-end space-x-2">
               <Button
@@ -1251,17 +1349,95 @@ export default function EnviosPorFechaPage() {
               <TabsTrigger value="recibidos">Recibidos</TabsTrigger>
             </TabsList>
             <TabsContent value="todos">
-              <ShipmentList
+              {/* <ShipmentList
                 shipments={filteredShipments}
                 showRemitoTriplicado={true}
                 onUpdateShipment={handleShipmentUpdate}
                 onDeleteShipment={handleShipmentDelete}
                 searchTerm={searchTerm}
-              />
+              /> */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-semibold text-gray-900">
+                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
+                  </h2>
+                  <Badge variant="outline" className="text-lg px-3 py-1">
+                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {shipments.map((shipment) => (
+                    <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
+                      <CardHeader className="pb-3">
+                        <div className="flex justify-between items-start">
+                          <CardTitle className="text-lg font-semibold text-blue-600">
+                            #{shipment.shipmentNumber}
+                          </CardTitle>
+                          {getStatusBadge(shipment.status)}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm">
+                          <MapPin className="h-4 w-4 text-gray-500" />
+                          <span className="font-medium">{shipment.client}</span>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <Truck className="h-4 w-4" />
+                          <span>{shipment.transport}</span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div className="flex items-center gap-1">
+                            <Package className="h-3 w-3 text-gray-500" />
+                            <span>{shipment.packages || 0} bultos</span>
+                          </div>
+                          {shipment.pallets && shipment.pallets > 0 && (
+                            <div className="flex items-center gap-1">
+                              <Package className="h-3 w-3 text-gray-500" />
+                              <span>{shipment.pallets} pallets</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {shipment.weight && (
+                          <div className="text-sm text-gray-600">
+                            <span className="font-medium">Peso:</span> {shipment.weight} kg
+                          </div>
+                        )}
+
+                        {(shipment.invoiceNumber || shipment.remitNumber) && (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <FileText className="h-4 w-4" />
+                            <span>
+                              {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
+                              {shipment.invoiceNumber && shipment.remitNumber && " | "}
+                              {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 pt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleViewDetails(shipment)}
+                            className="flex-1 flex items-center gap-1"
+                          >
+                            <Eye className="h-3 w-3" />
+                            Ver Detalles
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
             </TabsContent>
 
             <TabsContent value="pendientes">
-              <ShipmentList
+              {/* <ShipmentList
                 shipments={filteredShipments.filter(
                   (shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false,
                 )}
@@ -1269,17 +1445,177 @@ export default function EnviosPorFechaPage() {
                 onUpdateShipment={handleShipmentUpdate}
                 onDeleteShipment={handleShipmentDelete}
                 searchTerm={searchTerm}
-              />
+              /> */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-semibold text-gray-900">
+                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
+                  </h2>
+                  <Badge variant="outline" className="text-lg px-3 py-1">
+                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {shipments
+                    .filter((shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false)
+                    .map((shipment) => (
+                      <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
+                        <CardHeader className="pb-3">
+                          <div className="flex justify-between items-start">
+                            <CardTitle className="text-lg font-semibold text-blue-600">
+                              #{shipment.shipmentNumber}
+                            </CardTitle>
+                            {getStatusBadge(shipment.status)}
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="flex items-center gap-2 text-sm">
+                            <MapPin className="h-4 w-4 text-gray-500" />
+                            <span className="font-medium">{shipment.client}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <Truck className="h-4 w-4" />
+                            <span>{shipment.transport}</span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div className="flex items-center gap-1">
+                              <Package className="h-3 w-3 text-gray-500" />
+                              <span>{shipment.packages || 0} bultos</span>
+                            </div>
+                            {shipment.pallets && shipment.pallets > 0 && (
+                              <div className="flex items-center gap-1">
+                                <Package className="h-3 w-3 text-gray-500" />
+                                <span>{shipment.pallets} pallets</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {shipment.weight && (
+                            <div className="text-sm text-gray-600">
+                              <span className="font-medium">Peso:</span> {shipment.weight} kg
+                            </div>
+                          )}
+
+                          {(shipment.invoiceNumber || shipment.remitNumber) && (
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <FileText className="h-4 w-4" />
+                              <span>
+                                {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
+                                {shipment.invoiceNumber && shipment.remitNumber && " | "}
+                                {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex gap-2 pt-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleViewDetails(shipment)}
+                              className="flex-1 flex items-center gap-1"
+                            >
+                              <Eye className="h-3 w-3" />
+                              Ver Detalles
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                </div>
+              </div>
             </TabsContent>
 
             <TabsContent value="recibidos">
-              <ShipmentList
+              {/* <ShipmentList
                 shipments={filteredShipments.filter((shipment) => shipment.remitoTriplicado === true)}
                 showRemitoTriplicado={true}
                 onUpdateShipment={handleShipmentUpdate}
                 onDeleteShipment={handleShipmentDelete}
                 searchTerm={searchTerm}
-              />
+              /> */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-semibold text-gray-900">
+                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
+                  </h2>
+                  <Badge variant="outline" className="text-lg px-3 py-1">
+                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {shipments
+                    .filter((shipment) => shipment.remitoTriplicado === true)
+                    .map((shipment) => (
+                      <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
+                        <CardHeader className="pb-3">
+                          <div className="flex justify-between items-start">
+                            <CardTitle className="text-lg font-semibold text-blue-600">
+                              #{shipment.shipmentNumber}
+                            </CardTitle>
+                            {getStatusBadge(shipment.status)}
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="flex items-center gap-2 text-sm">
+                            <MapPin className="h-4 w-4 text-gray-500" />
+                            <span className="font-medium">{shipment.client}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <Truck className="h-4 w-4" />
+                            <span>{shipment.transport}</span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div className="flex items-center gap-1">
+                              <Package className="h-3 w-3 text-gray-500" />
+                              <span>{shipment.packages || 0} bultos</span>
+                            </div>
+                            {shipment.pallets && shipment.pallets > 0 && (
+                              <div className="flex items-center gap-1">
+                                <Package className="h-3 w-3 text-gray-500" />
+                                <span>{shipment.pallets} pallets</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {shipment.weight && (
+                            <div className="text-sm text-gray-600">
+                              <span className="font-medium">Peso:</span> {shipment.weight} kg
+                            </div>
+                          )}
+
+                          {(shipment.invoiceNumber || shipment.remitNumber) && (
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <FileText className="h-4 w-4" />
+                              <span>
+                                {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
+                                {shipment.invoiceNumber && shipment.remitNumber && " | "}
+                                {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex gap-2 pt-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleViewDetails(shipment)}
+                              className="flex-1 flex items-center gap-1"
+                            >
+                              <Eye className="h-3 w-3" />
+                              Ver Detalles
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                </div>
+              </div>
             </TabsContent>
           </Tabs>
         )}
@@ -1301,6 +1637,16 @@ export default function EnviosPorFechaPage() {
           </div>
         </div>
       </div>
+      {selectedShipment && (
+        <ShipmentDetailModal
+          shipment={selectedShipment}
+          isOpen={isDetailModalOpen}
+          onClose={() => {
+            setIsDetailModalOpen(false)
+            setSelectedShipment(null)
+          }}
+        />
+      )}
     </div>
   )
 }
