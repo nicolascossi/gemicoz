@@ -1,8 +1,8 @@
 import QRCode from "qrcode"
 
-export async function generateQRCode(data: string): Promise<string> {
+export async function generateQRCode(text: string): Promise<string> {
   try {
-    const qrCodeDataURL = await QRCode.toDataURL(data, {
+    const qrCodeDataURL = await QRCode.toDataURL(text, {
       width: 200,
       margin: 2,
       color: {
@@ -13,7 +13,6 @@ export async function generateQRCode(data: string): Promise<string> {
     return qrCodeDataURL
   } catch (error) {
     console.error("Error generating QR code:", error)
-    // Return a placeholder image if QR generation fails
     return "/placeholder.svg?height=200&width=200&text=QR"
   }
 }

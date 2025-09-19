@@ -10,34 +10,19 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import {
-  ArrowLeft,
-  FileDown,
-  Search,
-  Mail,
-  Loader2,
-  CheckCircle2,
-  X,
-  Package,
-  Truck,
-  MapPin,
-  FileText,
-  Eye,
-} from "lucide-react"
-import { format, isWithinInterval, parseISO, isValid } from "date-fns"
+import { ArrowLeft, Search, Loader2, Calendar, CheckCircle2, Package, Truck, MapPin, Download } from "lucide-react"
+import { format, isWithinInterval, parseISO, isValid, startOfDay, endOfDay } from "date-fns"
 import { es } from "date-fns/locale"
-import { ref, get, update, onValue, off } from "firebase/database"
+import { ref, get, update, onValue, off, query, orderByChild } from "firebase/database"
 import { db, rtdb } from "@/lib/firebase"
 import type { Shipment, Client } from "@/lib/types"
 import ShipmentDetailModal from "@/components/shipment-detail-modal"
 import { toast, useToast } from "@/components/ui/use-toast"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { debounce } from "lodash"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
 import XLSX from "xlsx"
-import { collection, query, where, orderBy, onSnapshot, Timestamp } from "firebase/firestore"
+import Link from "next/link"
 
 // Extended shipment type with client code
 interface ExtendedShipment extends Shipment {
@@ -322,8 +307,8 @@ function ShipmentList({
 
 export default function EnviosPorFechaPage() {
   const router = useRouter()
-  const [startDate, setStartDate] = useState<string>(format(new Date(), "yyyy-MM-dd"))
-  const [endDate, setEndDate] = useState<string>(format(new Date(), "yyyy-MM-dd"))
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
   const [shipments, setShipments] = useState<ExtendedShipment[]>([])
   const [clients, setClients] = useState<Record<string, Client>>({})
   const [isLoading, setIsLoading] = useState(false)
@@ -333,6 +318,9 @@ export default function EnviosPorFechaPage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
 
   // Use a ref to store the Firebase listener reference for cleanup
   const shipmentsListenerRef = useRef<any>(null)
@@ -363,6 +351,149 @@ export default function EnviosPorFechaPage() {
       setupShipmentsListener(startDate, endDate)
     }
   }, [startDate, endDate, clients])
+
+  useEffect(() => {
+    // Set default dates (last 30 days)
+    const today = new Date()
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+    setEndDate(format(today, "yyyy-MM-dd"))
+    setStartDate(format(thirtyDaysAgo, "yyyy-MM-dd"))
+  }, [])
+
+  useEffect(() => {
+    if (startDate && endDate) {
+      fetchShipments()
+    }
+  }, [startDate, endDate])
+
+  const fetchShipments = async () => {
+    if (!startDate || !endDate) return
+
+    setLoading(true)
+    try {
+      const shipmentsRef = ref(rtdb, "shipments")
+      const shipmentsQuery = query(shipmentsRef, orderByChild("date"))
+      const snapshot = await get(shipmentsQuery)
+
+      if (snapshot.exists()) {
+        const shipmentsData = snapshot.val()
+        const shipmentsArray: Shipment[] = Object.keys(shipmentsData).map((key) => ({
+          id: key,
+          ...shipmentsData[key],
+        }))
+
+        // Filter by date range
+        const start = startOfDay(parseISO(startDate))
+        const end = endOfDay(parseISO(endDate))
+
+        const filtered = shipmentsArray.filter((shipment) => {
+          try {
+            const shipmentDate = parseISO(shipment.date)
+            return isWithinInterval(shipmentDate, { start, end })
+          } catch (error) {
+            console.error("Error parsing date:", shipment.date, error)
+            return false
+          }
+        })
+
+        // Sort by date (newest first)
+        filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+        setShipments(shipmentsArray)
+      } else {
+        setShipments([])
+      }
+    } catch (error) {
+      console.error("Error fetching shipments:", error)
+      setShipments([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleShipmentClick = (shipment: Shipment) => {
+    setSelectedShipment(shipment)
+    setIsModalOpen(true)
+  }
+
+  const handleModalClose = () => {
+    setIsModalOpen(false)
+    setSelectedShipment(null)
+  }
+
+  const handleShipmentUpdated = () => {
+    fetchShipments()
+  }
+
+  const handleShipmentDeleted = () => {
+    fetchShipments()
+  }
+
+  const exportToCSV = () => {
+    if (filteredShipments.length === 0) return
+
+    const headers = [
+      "Número de Envío",
+      "Fecha",
+      "Cliente",
+      "Transporte",
+      "Bultos",
+      "Pallets",
+      "Peso (kg)",
+      "Valor Declarado",
+      "Estado",
+      "Factura",
+      "Remito",
+    ]
+
+    const csvContent = [
+      headers.join(","),
+      ...filteredShipments.map((shipment) =>
+        [
+          shipment.shipmentNumber,
+          format(parseISO(shipment.date), "dd/MM/yyyy"),
+          `"${shipment.client}"`,
+          `"${shipment.transport}"`,
+          shipment.packages || 0,
+          shipment.pallets || 0,
+          shipment.weight || 0,
+          shipment.declaredValue || 0,
+          shipment.status === "sent" ? "Enviado" : "Pendiente",
+          `"${shipment.invoiceNumber || ""}"`,
+          `"${shipment.remitNumber || ""}"`,
+        ].join(","),
+      ),
+    ].join("\n")
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+    const link = document.createElement("a")
+    const url = URL.createObjectURL(blob)
+    link.setAttribute("href", url)
+    link.setAttribute("download", `envios_${startDate}_${endDate}.csv`)
+    link.style.visibility = "hidden"
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "sent":
+        return <Badge className="bg-green-100 text-green-800">Enviado</Badge>
+      case "pending":
+        return <Badge className="bg-yellow-100 text-yellow-800">Pendiente</Badge>
+      case "delivered":
+        return <Badge className="bg-blue-100 text-blue-800">Entregado</Badge>
+      default:
+        return <Badge className="bg-gray-100 text-gray-800">Desconocido</Badge>
+    }
+  }
+
+  const totalPackages = filteredShipments.reduce((sum, shipment) => sum + (shipment.packages || 0), 0)
+  const totalPallets = filteredShipments.reduce((sum, shipment) => sum + (shipment.pallets || 0), 0)
+  const totalWeight = filteredShipments.reduce((sum, shipment) => sum + (shipment.weight || 0), 0)
+  const totalValue = filteredShipments.reduce((sum, shipment) => sum + (shipment.declaredValue || 0), 0)
 
   const fetchClients = async () => {
     try {
@@ -917,7 +1048,7 @@ export default function EnviosPorFechaPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.JSON.stringify(emailData),
+        body: JSON.stringify(emailData),
       })
 
       const result = await response.json()
@@ -1128,480 +1259,191 @@ export default function EnviosPorFechaPage() {
     }
   }, [startDate, endDate])
 
-  const [selectedDate, setSelectedDate] = useState("")
-  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
-
-  const fetchShipmentsByDate = async (date: string) => {
-    if (!date) return
-
-    setIsLoading(true)
-    try {
-      const startDateObj = new Date(date)
-      startDateObj.setHours(0, 0, 0, 0)
-
-      const endDateObj = new Date(date)
-      endDateObj.setHours(23, 59, 59, 999)
-
-      const q = query(
-        collection(db, "shipments"),
-        where("date", ">=", Timestamp.fromDate(startDateObj)),
-        where("date", "<=", Timestamp.fromDate(endDateObj)),
-        orderBy("date", "desc"),
-      )
-
-      const unsubscribe = onSnapshot(q, (querySnapshot) => {
-        const shipmentsData: ExtendedShipment[] = []
-        querySnapshot.forEach((doc) => {
-          const data = doc.data()
-          shipmentsData.push({
-            id: doc.id,
-            ...data,
-            date: data.date?.toDate?.() || new Date(data.date),
-          } as ExtendedShipment)
-        })
-        setShipments(shipmentsData)
-        setIsLoading(false)
-      })
-
-      return unsubscribe
-    } catch (error) {
-      console.error("Error fetching shipments:", error)
-      setIsLoading(false)
-    }
-  }
-
-  const handleDateChange = (date: string) => {
-    setSelectedDate(date)
-    setStartDate(date)
-    setEndDate(date)
-    if (date) {
-      fetchShipmentsByDate(date)
-    } else {
-      setShipments([])
-    }
-  }
-
-  const handleViewDetails = (shipment: Shipment) => {
-    setSelectedShipment(shipment)
-    setIsDetailModalOpen(true)
-  }
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "sent":
-        return <Badge className="bg-green-100 text-green-800">Enviado</Badge>
-      case "pending":
-        return <Badge className="bg-yellow-100 text-yellow-800">Pendiente</Badge>
-      case "delivered":
-        return <Badge className="bg-blue-100 text-blue-800">Entregado</Badge>
-      default:
-        return <Badge className="bg-gray-100 text-gray-800">Desconocido</Badge>
-    }
-  }
-
   return (
-    <div className="w-full p-4 px-[100px] pt-[50px]">
-      <div className="flex items-center justify-between mb-6">
-        <Button variant="outline" onClick={() => router.push("/dashboard")} className="print:hidden">
-          <ArrowLeft className="mr-2 h-4 w-4" /> Volver al Dashboard
-        </Button>
-        <h1 className="text-2xl font-bold">Envíos por Fecha</h1>
-      </div>
-
-      {dateError && (
-        <Alert variant="destructive" className="mb-4 mx-4">
-          <AlertTitle>Error de fecha</AlertTitle>
-          <AlertDescription>{dateError}</AlertDescription>
-        </Alert>
-      )}
-
-      <Card className="mb-6 print:hidden">
-        <CardHeader>
-          <CardTitle>Seleccionar Rango de Fechas</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
-            <div className="flex-1 max-w-xs">
-              <Label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
-                Seleccionar Fecha
-              </Label>
-              <Input
-                id="date"
-                type="date"
-                value={selectedDate}
-                onChange={(e) => handleDateChange(e.target.value)}
-                className="w-full"
-              />
-            </div>
-            <div className="flex items-end space-x-2">
-              <Button
-                onClick={handleSendPdfByEmail}
-                disabled={shipments.length === 0 || isSending || dateError !== null}
-              >
-                {isSending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...
-                  </>
-                ) : (
-                  <>
-                    <Mail className="mr-2 h-4 w-4" /> Enviar por Email
-                  </>
-                )}
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center space-x-4">
+            <Link href="/dashboard">
+              <Button variant="outline" size="sm">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Volver
               </Button>
-
-              <Button
-                onClick={handleExportPDF}
-                disabled={shipments.length === 0 || dateError !== null || isExporting}
-                variant="outline"
-              >
-                {isExporting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Exportando...
-                  </>
-                ) : (
-                  <>
-                    <FileDown className="mr-2 h-4 w-4" /> Exportar PDF
-                  </>
-                )}
-              </Button>
-
-              <Button
-                onClick={handleExportExcel}
-                disabled={shipments.length === 0 || dateError !== null}
-                variant="outline"
-              >
-                <FileDown className="mr-2 h-4 w-4" /> Exportar Excel
-              </Button>
+            </Link>
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Envíos por Fecha</h1>
+              <p className="text-gray-600">Consulta y exporta envíos por rango de fechas</p>
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <div className="print:hidden mb-4">
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            id="search-input"
-            placeholder="Buscar por cliente, transporte, factura, remito, nota de entrega, nota de pedido..."
-            className="pl-8 pr-10"
-            defaultValue={searchTerm}
-            onChange={handleSearchChange}
-          />
-          {searchTerm && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute right-0 top-0 h-9 w-9 p-0"
-              onClick={clearSearch}
-              title="Limpiar búsqueda"
-            >
-              <X className="h-4 w-4" />
+          {filteredShipments.length > 0 && (
+            <Button onClick={exportToCSV} variant="outline">
+              <Download className="w-4 h-4 mr-2" />
+              Exportar CSV
             </Button>
           )}
         </div>
-        {searchTerm && (
-          <div className="mt-2 text-sm text-muted-foreground">
-            Mostrando resultados para: <span className="font-medium">{searchTerm}</span>
-            {Array.isArray(filteredShipments) && (
-              <span className="ml-2">
-                ({filteredShipments.length} de {shipments.length} envíos)
-              </span>
-            )}
+
+        {/* Date Range Filters */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="w-5 h-5" />
+              Filtros de Fecha
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+              <div>
+                <Label htmlFor="startDate">Fecha Inicio</Label>
+                <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="endDate">Fecha Fin</Label>
+                <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+              <Button onClick={fetchShipments} disabled={loading || !startDate || !endDate}>
+                <Search className="w-4 h-4 mr-2" />
+                {loading ? "Buscando..." : "Buscar"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Summary Cards */}
+        {filteredShipments.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Total Envíos</p>
+                    <p className="text-2xl font-bold">{filteredShipments.length}</p>
+                  </div>
+                  <Package className="w-8 h-8 text-blue-600" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Total Bultos</p>
+                    <p className="text-2xl font-bold">{totalPackages}</p>
+                  </div>
+                  <Package className="w-8 h-8 text-green-600" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Peso Total</p>
+                    <p className="text-2xl font-bold">{totalWeight.toFixed(1)} kg</p>
+                  </div>
+                  <Package className="w-8 h-8 text-orange-600" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Valor Total</p>
+                    <p className="text-2xl font-bold">${totalValue.toFixed(2)}</p>
+                  </div>
+                  <Package className="w-8 h-8 text-purple-600" />
+                </div>
+              </CardContent>
+            </Card>
           </div>
         )}
-      </div>
 
-      <div className="print:mb-4">
-        <h2 className="text-xl font-bold mb-4 print:text-center">Envíos del {dateRangeText()}</h2>
-
-        {isLoading ? (
-          <div className="text-center py-8">Cargando envíos...</div>
-        ) : !Array.isArray(shipments) || shipments.length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-lg text-muted-foreground">No hay envíos para este rango de fechas.</p>
+        {/* Results */}
+        {loading ? (
+          <div className="flex justify-center items-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
           </div>
-        ) : (
-          <Tabs defaultValue="todos" className="w-full">
-            <TabsList>
-              <TabsTrigger value="todos">Todos</TabsTrigger>
-              <TabsTrigger value="pendientes">Pendientes</TabsTrigger>
-              <TabsTrigger value="recibidos">Recibidos</TabsTrigger>
-            </TabsList>
-            <TabsContent value="todos">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xl font-semibold text-gray-900">
-                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
-                  </h2>
-                  <Badge variant="outline" className="text-lg px-3 py-1">
-                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
-                  </Badge>
-                </div>
+        ) : filteredShipments.length > 0 ? (
+          <div className="space-y-4">
+            {filteredShipments.map((shipment) => (
+              <Card
+                key={shipment.id}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => handleShipmentClick(shipment)}
+              >
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-4 mb-2">
+                        <h3 className="text-lg font-semibold">#{shipment.shipmentNumber}</h3>
+                        {getStatusBadge(shipment.status)}
+                        <span className="text-sm text-gray-500">
+                          {format(parseISO(shipment.date), "dd/MM/yyyy", { locale: es })}
+                        </span>
+                      </div>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {shipments.map((shipment) => (
-                    <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
-                      <CardHeader className="pb-3">
-                        <div className="flex justify-between items-start">
-                          <CardTitle className="text-lg font-semibold text-blue-600">
-                            #{shipment.shipmentNumber}
-                          </CardTitle>
-                          {getStatusBadge(shipment.status)}
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm">
-                          <MapPin className="h-4 w-4 text-gray-500" />
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-gray-400" />
                           <span className="font-medium">{shipment.client}</span>
                         </div>
-
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Truck className="h-4 w-4" />
+                        <div className="flex items-center gap-2">
+                          <Truck className="w-4 h-4 text-gray-400" />
                           <span>{shipment.transport}</span>
                         </div>
-
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <div className="flex items-center gap-1">
-                            <Package className="h-3 w-3 text-gray-500" />
-                            <span>{shipment.packages || 0} bultos</span>
-                          </div>
-                          {shipment.pallets && shipment.pallets > 0 && (
-                            <div className="flex items-center gap-1">
-                              <Package className="h-3 w-3 text-gray-500" />
-                              <span>{shipment.pallets} pallets</span>
-                            </div>
-                          )}
+                        <div className="flex items-center gap-2">
+                          <Package className="w-4 h-4 text-gray-400" />
+                          <span>
+                            {shipment.packages || 0} bultos
+                            {shipment.pallets && shipment.pallets > 0 && `, ${shipment.pallets} pallets`}
+                          </span>
                         </div>
+                      </div>
 
-                        {shipment.weight && (
-                          <div className="text-sm text-gray-600">
-                            <span className="font-medium">Peso:</span> {shipment.weight} kg
-                          </div>
-                        )}
+                      {shipment.clientAddress && <p className="text-sm text-gray-600 mt-2">{shipment.clientAddress}</p>}
+                    </div>
 
-                        {(shipment.invoiceNumber || shipment.remitNumber) && (
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <FileText className="h-4 w-4" />
-                            <span>
-                              {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
-                              {shipment.invoiceNumber && shipment.remitNumber && " | "}
-                              {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
-                            </span>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleViewDetails(shipment)}
-                            className="flex-1 flex items-center gap-1"
-                          >
-                            <Eye className="h-3 w-3" />
-                            Ver Detalles
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="pendientes">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xl font-semibold text-gray-900">
-                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
-                  </h2>
-                  <Badge variant="outline" className="text-lg px-3 py-1">
-                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
-                  </Badge>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {shipments
-                    .filter((shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false)
-                    .map((shipment) => (
-                      <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
-                        <CardHeader className="pb-3">
-                          <div className="flex justify-between items-start">
-                            <CardTitle className="text-lg font-semibold text-blue-600">
-                              #{shipment.shipmentNumber}
-                            </CardTitle>
-                            {getStatusBadge(shipment.status)}
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <div className="flex items-center gap-2 text-sm">
-                            <MapPin className="h-4 w-4 text-gray-500" />
-                            <span className="font-medium">{shipment.client}</span>
-                          </div>
-
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Truck className="h-4 w-4" />
-                            <span>{shipment.transport}</span>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div className="flex items-center gap-1">
-                              <Package className="h-3 w-3 text-gray-500" />
-                              <span>{shipment.packages || 0} bultos</span>
-                            </div>
-                            {shipment.pallets && shipment.pallets > 0 && (
-                              <div className="flex items-center gap-1">
-                                <Package className="h-3 w-3 text-gray-500" />
-                                <span>{shipment.pallets} pallets</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {shipment.weight && (
-                            <div className="text-sm text-gray-600">
-                              <span className="font-medium">Peso:</span> {shipment.weight} kg
-                            </div>
-                          )}
-
-                          {(shipment.invoiceNumber || shipment.remitNumber) && (
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <FileText className="h-4 w-4" />
-                              <span>
-                                {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
-                                {shipment.invoiceNumber && shipment.remitNumber && " | "}
-                                {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
-                              </span>
-                            </div>
-                          )}
-
-                          <div className="flex gap-2 pt-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleViewDetails(shipment)}
-                              className="flex-1 flex items-center gap-1"
-                            >
-                              <Eye className="h-3 w-3" />
-                              Ver Detalles
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="recibidos">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xl font-semibold text-gray-900">
-                    Envíos del {format(new Date(selectedDate), "dd 'de' MMMM 'de' yyyy", { locale: es })}
-                  </h2>
-                  <Badge variant="outline" className="text-lg px-3 py-1">
-                    {shipments.length} envío{shipments.length !== 1 ? "s" : ""}
-                  </Badge>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {shipments
-                    .filter((shipment) => shipment.remitoTriplicado === true)
-                    .map((shipment) => (
-                      <Card key={shipment.id} className="hover:shadow-lg transition-shadow">
-                        <CardHeader className="pb-3">
-                          <div className="flex justify-between items-start">
-                            <CardTitle className="text-lg font-semibold text-blue-600">
-                              #{shipment.shipmentNumber}
-                            </CardTitle>
-                            {getStatusBadge(shipment.status)}
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <div className="flex items-center gap-2 text-sm">
-                            <MapPin className="h-4 w-4 text-gray-500" />
-                            <span className="font-medium">{shipment.client}</span>
-                          </div>
-
-                          <div className="flex items-center gap-2 text-sm text-gray-600">
-                            <Truck className="h-4 w-4" />
-                            <span>{shipment.transport}</span>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div className="flex items-center gap-1">
-                              <Package className="h-3 w-3 text-gray-500" />
-                              <span>{shipment.packages || 0} bultos</span>
-                            </div>
-                            {shipment.pallets && shipment.pallets > 0 && (
-                              <div className="flex items-center gap-1">
-                                <Package className="h-3 w-3 text-gray-500" />
-                                <span>{shipment.pallets} pallets</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {shipment.weight && (
-                            <div className="text-sm text-gray-600">
-                              <span className="font-medium">Peso:</span> {shipment.weight} kg
-                            </div>
-                          )}
-
-                          {(shipment.invoiceNumber || shipment.remitNumber) && (
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <FileText className="h-4 w-4" />
-                              <span>
-                                {shipment.invoiceNumber && `Fact: ${shipment.invoiceNumber}`}
-                                {shipment.invoiceNumber && shipment.remitNumber && " | "}
-                                {shipment.remitNumber && `Rem: ${shipment.remitNumber}`}
-                              </span>
-                            </div>
-                          )}
-
-                          <div className="flex gap-2 pt-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleViewDetails(shipment)}
-                              className="flex-1 flex items-center gap-1"
-                            >
-                              <Eye className="h-3 w-3" />
-                              Ver Detalles
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        )}
-
-        <div className="mt-4 text-right print:hidden">
-          <p className="text-sm text-muted-foreground">
-            Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}
-          </p>
-        </div>
-
-        <div className="mt-8 print:block hidden">
-          <div className="flex justify-between border-t pt-4">
-            <div>
-              <p>Fecha de impresión: {safeFormatDate(new Date(), "dd/MM/yyyy HH:mm", { locale: es })}</p>
-            </div>
-            <div>
-              <p>Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}</p>
-            </div>
+                    <div className="text-right">
+                      <div className="text-lg font-semibold">
+                        {shipment.weight ? `${shipment.weight} kg` : "Sin peso"}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        ${shipment.declaredValue ? shipment.declaredValue.toFixed(2) : "0.00"}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        </div>
+        ) : (
+          <Card>
+            <CardContent className="p-12 text-center">
+              <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-600 mb-2">No se encontraron envíos</h3>
+              <p className="text-gray-500">
+                No hay envíos en el rango de fechas seleccionado.
+                <br />
+                Intenta ajustar las fechas de búsqueda.
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* Shipment Detail Modal */}
       {selectedShipment && (
         <ShipmentDetailModal
           shipment={selectedShipment}
-          isOpen={isDetailModalOpen}
-          onClose={() => {
-            setIsDetailModalOpen(false)
-            setSelectedShipment(null)
-          }}
+          onClose={handleModalClose}
+          onUpdate={handleShipmentUpdated}
+          onDelete={handleShipmentDeleted}
+          showPrintButton={true}
         />
       )}
     </div>
