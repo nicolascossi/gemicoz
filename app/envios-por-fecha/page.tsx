@@ -10,19 +10,20 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Search, Loader2, Calendar, CheckCircle2, Package, Truck, MapPin, Download } from "lucide-react"
-import { format, isWithinInterval, parseISO, isValid, startOfDay, endOfDay } from "date-fns"
+import { ArrowLeft, FileDown, Search, Mail, Loader2, Calendar, CheckCircle2, X } from "lucide-react"
+import { format, isWithinInterval, parseISO, isValid } from "date-fns"
 import { es } from "date-fns/locale"
-import { ref, get, update, onValue, off, query, orderByChild } from "firebase/database"
+import { ref, get, update, onValue, off } from "firebase/database"
 import { db, rtdb } from "@/lib/firebase"
 import type { Shipment, Client } from "@/lib/types"
 import ShipmentDetailModal from "@/components/shipment-detail-modal"
 import { toast, useToast } from "@/components/ui/use-toast"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { debounce } from "lodash"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
-import XLSX from "xlsx"
-import Link from "next/link"
+import * as XLSX from "xlsx"
 
 // Extended shipment type with client code
 interface ExtendedShipment extends Shipment {
@@ -307,8 +308,8 @@ function ShipmentList({
 
 export default function EnviosPorFechaPage() {
   const router = useRouter()
-  const [startDate, setStartDate] = useState("")
-  const [endDate, setEndDate] = useState("")
+  const [startDate, setStartDate] = useState<string>("")
+  const [endDate, setEndDate] = useState<string>("")
   const [shipments, setShipments] = useState<ExtendedShipment[]>([])
   const [clients, setClients] = useState<Record<string, Client>>({})
   const [isLoading, setIsLoading] = useState(false)
@@ -318,12 +319,19 @@ export default function EnviosPorFechaPage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
-  const [isModalOpen, setIsModalOpen] = useState(false)
 
   // Use a ref to store the Firebase listener reference for cleanup
   const shipmentsListenerRef = useRef<any>(null)
+
+  // Initialize dates on client side only
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const today = new Date()
+      const formattedToday = format(today, "yyyy-MM-dd")
+      setStartDate(formattedToday)
+      setEndDate(formattedToday)
+    }
+  }, [])
 
   useEffect(() => {
     // Fetch clients first
@@ -351,149 +359,6 @@ export default function EnviosPorFechaPage() {
       setupShipmentsListener(startDate, endDate)
     }
   }, [startDate, endDate, clients])
-
-  useEffect(() => {
-    // Set default dates (last 30 days)
-    const today = new Date()
-    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-
-    setEndDate(format(today, "yyyy-MM-dd"))
-    setStartDate(format(thirtyDaysAgo, "yyyy-MM-dd"))
-  }, [])
-
-  useEffect(() => {
-    if (startDate && endDate) {
-      fetchShipments()
-    }
-  }, [startDate, endDate])
-
-  const fetchShipments = async () => {
-    if (!startDate || !endDate) return
-
-    setLoading(true)
-    try {
-      const shipmentsRef = ref(rtdb, "shipments")
-      const shipmentsQuery = query(shipmentsRef, orderByChild("date"))
-      const snapshot = await get(shipmentsQuery)
-
-      if (snapshot.exists()) {
-        const shipmentsData = snapshot.val()
-        const shipmentsArray: Shipment[] = Object.keys(shipmentsData).map((key) => ({
-          id: key,
-          ...shipmentsData[key],
-        }))
-
-        // Filter by date range
-        const start = startOfDay(parseISO(startDate))
-        const end = endOfDay(parseISO(endDate))
-
-        const filtered = shipmentsArray.filter((shipment) => {
-          try {
-            const shipmentDate = parseISO(shipment.date)
-            return isWithinInterval(shipmentDate, { start, end })
-          } catch (error) {
-            console.error("Error parsing date:", shipment.date, error)
-            return false
-          }
-        })
-
-        // Sort by date (newest first)
-        filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-        setShipments(shipmentsArray)
-      } else {
-        setShipments([])
-      }
-    } catch (error) {
-      console.error("Error fetching shipments:", error)
-      setShipments([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleShipmentClick = (shipment: Shipment) => {
-    setSelectedShipment(shipment)
-    setIsModalOpen(true)
-  }
-
-  const handleModalClose = () => {
-    setIsModalOpen(false)
-    setSelectedShipment(null)
-  }
-
-  const handleShipmentUpdated = () => {
-    fetchShipments()
-  }
-
-  const handleShipmentDeleted = () => {
-    fetchShipments()
-  }
-
-  const exportToCSV = () => {
-    if (filteredShipments.length === 0) return
-
-    const headers = [
-      "Número de Envío",
-      "Fecha",
-      "Cliente",
-      "Transporte",
-      "Bultos",
-      "Pallets",
-      "Peso (kg)",
-      "Valor Declarado",
-      "Estado",
-      "Factura",
-      "Remito",
-    ]
-
-    const csvContent = [
-      headers.join(","),
-      ...filteredShipments.map((shipment) =>
-        [
-          shipment.shipmentNumber,
-          format(parseISO(shipment.date), "dd/MM/yyyy"),
-          `"${shipment.client}"`,
-          `"${shipment.transport}"`,
-          shipment.packages || 0,
-          shipment.pallets || 0,
-          shipment.weight || 0,
-          shipment.declaredValue || 0,
-          shipment.status === "sent" ? "Enviado" : "Pendiente",
-          `"${shipment.invoiceNumber || ""}"`,
-          `"${shipment.remitNumber || ""}"`,
-        ].join(","),
-      ),
-    ].join("\n")
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
-    const link = document.createElement("a")
-    const url = URL.createObjectURL(blob)
-    link.setAttribute("href", url)
-    link.setAttribute("download", `envios_${startDate}_${endDate}.csv`)
-    link.style.visibility = "hidden"
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-  }
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "sent":
-        return <Badge className="bg-green-100 text-green-800">Enviado</Badge>
-      case "pending":
-        return <Badge className="bg-yellow-100 text-yellow-800">Pendiente</Badge>
-      case "delivered":
-        return <Badge className="bg-blue-100 text-blue-800">Entregado</Badge>
-      default:
-        return <Badge className="bg-gray-100 text-gray-800">Desconocido</Badge>
-    }
-  }
-
-  const totalPackages = filteredShipments.reduce((sum, shipment) => sum + (shipment.packages || 0), 0)
-  const totalPallets = filteredShipments.reduce((sum, shipment) => sum + (shipment.pallets || 0), 0)
-  const totalWeight = filteredShipments.reduce((sum, shipment) => sum + (shipment.weight || 0), 0)
-  const totalValue = filteredShipments.reduce((sum, shipment) => sum + (shipment.declaredValue || 0), 0)
 
   const fetchClients = async () => {
     try {
@@ -709,7 +574,7 @@ export default function EnviosPorFechaPage() {
         "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
 
       // Función para añadir el logo y encabezado a cada página
-      const addHeaderToPage = (doc) => {
+      const addHeaderToPage = (doc: any) => {
         try {
           // Añadir logo
           doc.addImage(logoUrl, "PNG", 14, 10, 30, 15)
@@ -814,7 +679,7 @@ export default function EnviosPorFechaPage() {
           right: leftMargin, // Centrar la tabla horizontalmente
           bottom: 15,
         },
-        didDrawPage: (data) => {
+        didDrawPage: (data: any) => {
           // Si no es la primera página, añadir logo y encabezado
           if (data.pageNumber > 1) {
             addHeaderToPage(doc)
@@ -886,7 +751,7 @@ export default function EnviosPorFechaPage() {
         "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Logo%20Gemico-uBE9D9uAFAorAj3wQ1JCsUhsu6oZwO.png"
 
       // Función para añadir el logo y encabezado a cada página
-      const addHeaderToPage = (doc) => {
+      const addHeaderToPage = (doc: any) => {
         try {
           // Añadir logo
           doc.addImage(logoUrl, "PNG", 14, 10, 30, 15)
@@ -991,7 +856,7 @@ export default function EnviosPorFechaPage() {
           right: leftMargin, // Centrar la tabla horizontalmente
           bottom: 15,
         },
-        didDrawPage: (data) => {
+        didDrawPage: (data: any) => {
           // Si no es la primera página, añadir logo y encabezado
           if (data.pageNumber > 1) {
             addHeaderToPage(doc)
@@ -1062,7 +927,7 @@ export default function EnviosPorFechaPage() {
         description: `La plantilla de envíos ha sido enviada a los destinatarios especificados.`,
         duration: 5000,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error al enviar el PDF por correo:", error)
       toast({
         title: "Error",
@@ -1259,193 +1124,198 @@ export default function EnviosPorFechaPage() {
     }
   }, [startDate, endDate])
 
+  // Don't render anything until we have dates set (client-side only)
+  if (!startDate || !endDate) {
+    return <div>Cargando...</div>
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto p-6">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center space-x-4">
-            <Link href="/dashboard">
-              <Button variant="outline" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Volver
+    <div className="w-full p-4 px-[100px] pt-[50px]">
+      <div className="flex items-center justify-between mb-6">
+        <Button variant="outline" onClick={() => router.push("/dashboard")} className="print:hidden">
+          <ArrowLeft className="mr-2 h-4 w-4" /> Volver al Dashboard
+        </Button>
+        <h1 className="text-2xl font-bold">Envíos por Fecha</h1>
+      </div>
+
+      {dateError && (
+        <Alert variant="destructive" className="mb-4 mx-4">
+          <AlertTitle>Error de fecha</AlertTitle>
+          <AlertDescription>{dateError}</AlertDescription>
+        </Alert>
+      )}
+
+      <Card className="mb-6 print:hidden">
+        <CardHeader>
+          <CardTitle>Seleccionar Rango de Fechas</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
+            <div className="flex-1">
+              <Label htmlFor="startDate">Fecha Inicial</Label>
+              <div className="relative">
+                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="startDate"
+                  type="date"
+                  value={startDate}
+                  onChange={handleStartDateChange}
+                  className="pl-8 mt-1"
+                />
+              </div>
+            </div>
+            <div className="flex-1">
+              <Label htmlFor="endDate">Fecha Final</Label>
+              <div className="relative">
+                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input id="endDate" type="date" value={endDate} onChange={handleEndDateChange} className="pl-8 mt-1" />
+              </div>
+            </div>
+            <div className="flex items-end space-x-2">
+              <Button
+                onClick={handleSendPdfByEmail}
+                disabled={shipments.length === 0 || isSending || dateError !== null}
+              >
+                {isSending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...
+                  </>
+                ) : (
+                  <>
+                    <Mail className="mr-2 h-4 w-4" /> Enviar por Email
+                  </>
+                )}
               </Button>
-            </Link>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Envíos por Fecha</h1>
-              <p className="text-gray-600">Consulta y exporta envíos por rango de fechas</p>
+
+              <Button
+                onClick={handleExportPDF}
+                disabled={shipments.length === 0 || dateError !== null || isExporting}
+                variant="outline"
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Exportando...
+                  </>
+                ) : (
+                  <>
+                    <FileDown className="mr-2 h-4 w-4" /> Exportar PDF
+                  </>
+                )}
+              </Button>
+
+              <Button
+                onClick={handleExportExcel}
+                disabled={shipments.length === 0 || dateError !== null}
+                variant="outline"
+              >
+                <FileDown className="mr-2 h-4 w-4" /> Exportar Excel
+              </Button>
             </div>
           </div>
-          {filteredShipments.length > 0 && (
-            <Button onClick={exportToCSV} variant="outline">
-              <Download className="w-4 h-4 mr-2" />
-              Exportar CSV
+        </CardContent>
+      </Card>
+
+      <div className="print:hidden mb-4">
+        <div className="relative w-full max-w-sm">
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            id="search-input"
+            placeholder="Buscar por cliente, transporte, factura, remito, nota de entrega, nota de pedido..."
+            className="pl-8 pr-10"
+            defaultValue={searchTerm}
+            onChange={handleSearchChange}
+          />
+          {searchTerm && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="absolute right-0 top-0 h-9 w-9 p-0"
+              onClick={clearSearch}
+              title="Limpiar búsqueda"
+            >
+              <X className="h-4 w-4" />
             </Button>
           )}
         </div>
-
-        {/* Date Range Filters */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Calendar className="w-5 h-5" />
-              Filtros de Fecha
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div>
-                <Label htmlFor="startDate">Fecha Inicio</Label>
-                <Input id="startDate" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="endDate">Fecha Fin</Label>
-                <Input id="endDate" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-              </div>
-              <Button onClick={fetchShipments} disabled={loading || !startDate || !endDate}>
-                <Search className="w-4 h-4 mr-2" />
-                {loading ? "Buscando..." : "Buscar"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Summary Cards */}
-        {filteredShipments.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Total Envíos</p>
-                    <p className="text-2xl font-bold">{filteredShipments.length}</p>
-                  </div>
-                  <Package className="w-8 h-8 text-blue-600" />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Total Bultos</p>
-                    <p className="text-2xl font-bold">{totalPackages}</p>
-                  </div>
-                  <Package className="w-8 h-8 text-green-600" />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Peso Total</p>
-                    <p className="text-2xl font-bold">{totalWeight.toFixed(1)} kg</p>
-                  </div>
-                  <Package className="w-8 h-8 text-orange-600" />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Valor Total</p>
-                    <p className="text-2xl font-bold">${totalValue.toFixed(2)}</p>
-                  </div>
-                  <Package className="w-8 h-8 text-purple-600" />
-                </div>
-              </CardContent>
-            </Card>
+        {searchTerm && (
+          <div className="mt-2 text-sm text-muted-foreground">
+            Mostrando resultados para: <span className="font-medium">{searchTerm}</span>
+            {Array.isArray(filteredShipments) && (
+              <span className="ml-2">
+                ({filteredShipments.length} de {shipments.length} envíos)
+              </span>
+            )}
           </div>
-        )}
-
-        {/* Results */}
-        {loading ? (
-          <div className="flex justify-center items-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-          </div>
-        ) : filteredShipments.length > 0 ? (
-          <div className="space-y-4">
-            {filteredShipments.map((shipment) => (
-              <Card
-                key={shipment.id}
-                className="cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() => handleShipmentClick(shipment)}
-              >
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-4 mb-2">
-                        <h3 className="text-lg font-semibold">#{shipment.shipmentNumber}</h3>
-                        {getStatusBadge(shipment.status)}
-                        <span className="text-sm text-gray-500">
-                          {format(parseISO(shipment.date), "dd/MM/yyyy", { locale: es })}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-gray-400" />
-                          <span className="font-medium">{shipment.client}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Truck className="w-4 h-4 text-gray-400" />
-                          <span>{shipment.transport}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Package className="w-4 h-4 text-gray-400" />
-                          <span>
-                            {shipment.packages || 0} bultos
-                            {shipment.pallets && shipment.pallets > 0 && `, ${shipment.pallets} pallets`}
-                          </span>
-                        </div>
-                      </div>
-
-                      {shipment.clientAddress && <p className="text-sm text-gray-600 mt-2">{shipment.clientAddress}</p>}
-                    </div>
-
-                    <div className="text-right">
-                      <div className="text-lg font-semibold">
-                        {shipment.weight ? `${shipment.weight} kg` : "Sin peso"}
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        ${shipment.declaredValue ? shipment.declaredValue.toFixed(2) : "0.00"}
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <Card>
-            <CardContent className="p-12 text-center">
-              <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-600 mb-2">No se encontraron envíos</h3>
-              <p className="text-gray-500">
-                No hay envíos en el rango de fechas seleccionado.
-                <br />
-                Intenta ajustar las fechas de búsqueda.
-              </p>
-            </CardContent>
-          </Card>
         )}
       </div>
 
-      {/* Shipment Detail Modal */}
-      {selectedShipment && (
-        <ShipmentDetailModal
-          shipment={selectedShipment}
-          onClose={handleModalClose}
-          onUpdate={handleShipmentUpdated}
-          onDelete={handleShipmentDeleted}
-          showPrintButton={true}
-        />
-      )}
+      <div className="print:mb-4">
+        <h2 className="text-xl font-bold mb-4 print:text-center">Envíos del {dateRangeText()}</h2>
+
+        {isLoading ? (
+          <div className="text-center py-8">Cargando envíos...</div>
+        ) : !Array.isArray(shipments) || shipments.length === 0 ? (
+          <div className="text-center py-8">
+            <p className="text-lg text-muted-foreground">No hay envíos para este rango de fechas.</p>
+          </div>
+        ) : (
+          <Tabs defaultValue="todos" className="w-full">
+            <TabsList>
+              <TabsTrigger value="todos">Todos</TabsTrigger>
+              <TabsTrigger value="pendientes">Pendientes</TabsTrigger>
+              <TabsTrigger value="recibidos">Recibidos</TabsTrigger>
+            </TabsList>
+            <TabsContent value="todos">
+              <ShipmentList
+                shipments={filteredShipments}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+
+            <TabsContent value="pendientes">
+              <ShipmentList
+                shipments={filteredShipments.filter(
+                  (shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false,
+                )}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+
+            <TabsContent value="recibidos">
+              <ShipmentList
+                shipments={filteredShipments.filter((shipment) => shipment.remitoTriplicado === true)}
+                showRemitoTriplicado={true}
+                onUpdateShipment={handleShipmentUpdate}
+                onDeleteShipment={handleShipmentDelete}
+                searchTerm={searchTerm}
+              />
+            </TabsContent>
+          </Tabs>
+        )}
+
+        <div className="mt-4 text-right print:hidden">
+          <p className="text-sm text-muted-foreground">
+            Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}
+          </p>
+        </div>
+
+        <div className="mt-8 print:block hidden">
+          <div className="flex justify-between border-t pt-4">
+            <div>
+              <p>Fecha de impresión: {safeFormatDate(new Date(), "dd/MM/yyyy HH:mm", { locale: es })}</p>
+            </div>
+            <div>
+              <p>Total de envíos: {Array.isArray(filteredShipments) ? filteredShipments.length : 0}</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

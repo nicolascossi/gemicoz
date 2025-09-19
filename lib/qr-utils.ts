@@ -1,6 +1,6 @@
 import QRCode from "qrcode"
 
-export async function generateQRCode(text: string): Promise<string> {
+export const generateQRCode = async (text: string): Promise<string> => {
   try {
     const qrCodeDataURL = await QRCode.toDataURL(text, {
       width: 200,
@@ -13,11 +13,23 @@ export async function generateQRCode(text: string): Promise<string> {
     return qrCodeDataURL
   } catch (error) {
     console.error("Error generating QR code:", error)
-    return "/placeholder.svg?height=200&width=200&text=QR"
+    throw error
   }
 }
 
-// Legacy function for compatibility
-export function generateQRValue(shipmentNumber: string): string {
-  return `https://gemico-envios.vercel.app/pedido/${shipmentNumber}`
+export const generateQRCodeBuffer = async (text: string): Promise<Buffer> => {
+  try {
+    const buffer = await QRCode.toBuffer(text, {
+      width: 200,
+      margin: 2,
+      color: {
+        dark: "#000000",
+        light: "#FFFFFF",
+      },
+    })
+    return buffer
+  } catch (error) {
+    console.error("Error generating QR code buffer:", error)
+    throw error
+  }
 }
