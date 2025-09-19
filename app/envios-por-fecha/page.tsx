@@ -917,7 +917,7 @@ export default function EnviosPorFechaPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(emailData),
+        body: JSON.JSON.stringify(emailData),
       })
 
       const result = await response.json()
@@ -1222,26 +1222,6 @@ export default function EnviosPorFechaPage() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
-            {/* <div className="flex-1">
-              <Label htmlFor="startDate">Fecha Inicial</Label>
-              <div className="relative">
-                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="startDate"
-                  type="date"
-                  value={startDate}
-                  onChange={handleStartDateChange}
-                  className="pl-8 mt-1"
-                />
-              </div>
-            </div>
-            <div className="flex-1">
-              <Label htmlFor="endDate">Fecha Final</Label>
-              <div className="relative">
-                <Calendar className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input id="endDate" type="date" value={endDate} onChange={handleEndDateChange} className="pl-8 mt-1" />
-              </div>
-            </div> */}
             <div className="flex-1 max-w-xs">
               <Label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
                 Seleccionar Fecha
@@ -1349,13 +1329,6 @@ export default function EnviosPorFechaPage() {
               <TabsTrigger value="recibidos">Recibidos</TabsTrigger>
             </TabsList>
             <TabsContent value="todos">
-              {/* <ShipmentList
-                shipments={filteredShipments}
-                showRemitoTriplicado={true}
-                onUpdateShipment={handleShipmentUpdate}
-                onDeleteShipment={handleShipmentDelete}
-                searchTerm={searchTerm}
-              /> */}
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <h2 className="text-xl font-semibold text-gray-900">
@@ -1437,15 +1410,6 @@ export default function EnviosPorFechaPage() {
             </TabsContent>
 
             <TabsContent value="pendientes">
-              {/* <ShipmentList
-                shipments={filteredShipments.filter(
-                  (shipment) => !shipment.remitoTriplicado || shipment.remitoTriplicado === false,
-                )}
-                showRemitoTriplicado={true}
-                onUpdateShipment={handleShipmentUpdate}
-                onDeleteShipment={handleShipmentDelete}
-                searchTerm={searchTerm}
-              /> */}
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <h2 className="text-xl font-semibold text-gray-900">
@@ -1529,13 +1493,6 @@ export default function EnviosPorFechaPage() {
             </TabsContent>
 
             <TabsContent value="recibidos">
-              {/* <ShipmentList
-                shipments={filteredShipments.filter((shipment) => shipment.remitoTriplicado === true)}
-                showRemitoTriplicado={true}
-                onUpdateShipment={handleShipmentUpdate}
-                onDeleteShipment={handleShipmentDelete}
-                searchTerm={searchTerm}
-              /> */}
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <h2 className="text-xl font-semibold text-gray-900">

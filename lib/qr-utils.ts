@@ -13,6 +13,7 @@ export async function generateQRCode(data: string): Promise<string> {
     return qrCodeDataURL
   } catch (error) {
     console.error("Error generating QR code:", error)
+    // Return a placeholder image if QR generation fails
     return "/placeholder.svg?height=200&width=200&text=QR"
   }
 }

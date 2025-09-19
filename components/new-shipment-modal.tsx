@@ -3,17 +3,17 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
+import { collection, addDoc, getDocs, query, orderBy, limit, Timestamp } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { collection, addDoc, getDocs, Timestamp } from "firebase/firestore"
-import { db } from "@/lib/firebase"
-import { toast } from "@/components/ui/use-toast"
-import { generateShipmentNumber } from "@/lib/shipment-utils"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useToast } from "@/components/ui/use-toast"
+import type { Client, Transport } from "@/lib/types"
 
 interface NewShipmentModalProps {
   isOpen: boolean
@@ -21,34 +21,19 @@ interface NewShipmentModalProps {
   onShipmentCreated: () => void
 }
 
-interface Client {
-  id: string
-  name: string
-  address: string
-  phone: string
-  email: string
-}
-
-interface Transport {
-  id: string
-  name: string
-  contact: string
-  phone: string
-}
-
 export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }: NewShipmentModalProps) {
+  const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [clients, setClients] = useState<Client[]>([])
   const [transports, setTransports] = useState<Transport[]>([])
-
   const [formData, setFormData] = useState({
     client: "",
     clientAddress: "",
     transport: "",
-    packages: 0,
-    pallets: 0,
-    weight: 0,
-    declaredValue: 0,
+    packages: "",
+    pallets: "",
+    weight: "",
+    declaredValue: "",
     invoiceNumber: "",
     remitNumber: "",
     notes: "",
@@ -56,7 +41,6 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
     isFragile: false,
     isUrgent: false,
     hasColdChain: false,
-    status: "pending" as "pending" | "sent" | "delivered",
   })
 
   useEffect(() => {
@@ -92,6 +76,29 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
     }
   }
 
+  const generateShipmentNumber = async (): Promise<string> => {
+    try {
+      const q = query(collection(db, "shipments"), orderBy("shipmentNumber", "desc"), limit(1))
+      const querySnapshot = await getDocs(q)
+
+      let lastNumber = 0
+      if (!querySnapshot.empty) {
+        const lastDoc = querySnapshot.docs[0]
+        const lastShipmentNumber = lastDoc.data().shipmentNumber
+        const match = lastShipmentNumber.match(/GEM(\d+)/)
+        if (match) {
+          lastNumber = Number.parseInt(match[1])
+        }
+      }
+
+      const newNumber = lastNumber + 1
+      return `GEM${newNumber.toString().padStart(6, "0")}`
+    } catch (error) {
+      console.error("Error generating shipment number:", error)
+      return `GEM${Date.now().toString().slice(-6)}`
+    }
+  }
+
   const handleClientChange = (clientName: string) => {
     const selectedClient = clients.find((c) => c.name === clientName)
     setFormData((prev) => ({
@@ -113,26 +120,30 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
       return
     }
 
-    if (formData.packages === 0 && formData.pallets === 0) {
-      toast({
-        title: "Error",
-        description: "Debe especificar al menos 1 bulto o 1 pallet",
-        variant: "destructive",
-      })
-      return
-    }
-
     setLoading(true)
 
     try {
       const shipmentNumber = await generateShipmentNumber()
 
       const shipmentData = {
-        ...formData,
         shipmentNumber,
-        date: Timestamp.fromDate(new Date()),
-        createdAt: Timestamp.fromDate(new Date()),
-        updatedAt: Timestamp.fromDate(new Date()),
+        client: formData.client,
+        clientAddress: formData.clientAddress,
+        transport: formData.transport,
+        packages: formData.packages ? Number.parseInt(formData.packages) : 0,
+        pallets: formData.pallets ? Number.parseInt(formData.pallets) : 0,
+        weight: formData.weight ? Number.parseFloat(formData.weight) : 0,
+        declaredValue: formData.declaredValue ? Number.parseFloat(formData.declaredValue) : 0,
+        invoiceNumber: formData.invoiceNumber,
+        remitNumber: formData.remitNumber,
+        notes: formData.notes,
+        deliveryNote: formData.deliveryNote,
+        isFragile: formData.isFragile,
+        isUrgent: formData.isUrgent,
+        hasColdChain: formData.hasColdChain,
+        status: "pending",
+        date: Timestamp.now(),
+        createdAt: Timestamp.now(),
       }
 
       await addDoc(collection(db, "shipments"), shipmentData)
@@ -142,18 +153,15 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
         description: `Envío ${shipmentNumber} creado correctamente`,
       })
 
-      onShipmentCreated()
-      onClose()
-
       // Reset form
       setFormData({
         client: "",
         clientAddress: "",
         transport: "",
-        packages: 0,
-        pallets: 0,
-        weight: 0,
-        declaredValue: 0,
+        packages: "",
+        pallets: "",
+        weight: "",
+        declaredValue: "",
         invoiceNumber: "",
         remitNumber: "",
         notes: "",
@@ -161,8 +169,10 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
         isFragile: false,
         isUrgent: false,
         hasColdChain: false,
-        status: "pending",
       })
+
+      onShipmentCreated()
+      onClose()
     } catch (error) {
       console.error("Error creating shipment:", error)
       toast({
@@ -231,7 +241,7 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
             />
           </div>
 
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <Label htmlFor="packages">Bultos</Label>
               <Input
@@ -239,7 +249,8 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 type="number"
                 min="0"
                 value={formData.packages}
-                onChange={(e) => setFormData((prev) => ({ ...prev, packages: Number.parseInt(e.target.value) || 0 }))}
+                onChange={(e) => setFormData((prev) => ({ ...prev, packages: e.target.value }))}
+                placeholder="Número de bultos"
               />
             </div>
 
@@ -250,10 +261,13 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 type="number"
                 min="0"
                 value={formData.pallets}
-                onChange={(e) => setFormData((prev) => ({ ...prev, pallets: Number.parseInt(e.target.value) || 0 }))}
+                onChange={(e) => setFormData((prev) => ({ ...prev, pallets: e.target.value }))}
+                placeholder="Número de pallets"
               />
             </div>
+          </div>
 
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <Label htmlFor="weight">Peso (kg)</Label>
               <Input
@@ -262,7 +276,8 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 step="0.01"
                 min="0"
                 value={formData.weight}
-                onChange={(e) => setFormData((prev) => ({ ...prev, weight: Number.parseFloat(e.target.value) || 0 }))}
+                onChange={(e) => setFormData((prev) => ({ ...prev, weight: e.target.value }))}
+                placeholder="Peso total"
               />
             </div>
 
@@ -274,9 +289,8 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 step="0.01"
                 min="0"
                 value={formData.declaredValue}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, declaredValue: Number.parseFloat(e.target.value) || 0 }))
-                }
+                onChange={(e) => setFormData((prev) => ({ ...prev, declaredValue: e.target.value }))}
+                placeholder="Valor declarado"
               />
             </div>
           </div>
@@ -288,7 +302,7 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 id="invoiceNumber"
                 value={formData.invoiceNumber}
                 onChange={(e) => setFormData((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
-                placeholder="Ej: 001-001-00001234"
+                placeholder="Número de factura"
               />
             </div>
 
@@ -298,7 +312,7 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 id="remitNumber"
                 value={formData.remitNumber}
                 onChange={(e) => setFormData((prev) => ({ ...prev, remitNumber: e.target.value }))}
-                placeholder="Ej: 001-001-00001234"
+                placeholder="Número de remito"
               />
             </div>
           </div>
@@ -310,7 +324,7 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
               value={formData.notes}
               onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
               placeholder="Observaciones adicionales"
-              rows={2}
+              rows={3}
             />
           </div>
 
@@ -320,14 +334,14 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
               id="deliveryNote"
               value={formData.deliveryNote}
               onChange={(e) => setFormData((prev) => ({ ...prev, deliveryNote: e.target.value }))}
-              placeholder="Instrucciones especiales para la entrega"
+              placeholder="Instrucciones especiales de entrega"
               rows={2}
             />
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <Label>Características Especiales</Label>
-            <div className="flex flex-wrap gap-4">
+            <div className="flex flex-col space-y-2">
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="isFragile"
@@ -355,25 +369,6 @@ export default function NewShipmentModal({ isOpen, onClose, onShipmentCreated }:
                 <Label htmlFor="hasColdChain">Cadena de Frío</Label>
               </div>
             </div>
-          </div>
-
-          <div>
-            <Label htmlFor="status">Estado</Label>
-            <Select
-              value={formData.status}
-              onValueChange={(value: "pending" | "sent" | "delivered") =>
-                setFormData((prev) => ({ ...prev, status: value }))
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Pendiente</SelectItem>
-                <SelectItem value="sent">Enviado</SelectItem>
-                <SelectItem value="delivered">Entregado</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="flex justify-end space-x-2 pt-4">
